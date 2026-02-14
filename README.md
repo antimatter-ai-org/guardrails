@@ -37,13 +37,13 @@ Router call sequence:
 - `GR_RUNTIME_MODE=cpu`
 - GLiNER runs in-process with torch.
 - Local torch device preference is controlled by `GR_CPU_DEVICE` (`auto` by default; prefers `mps` on Apple Silicon).
-- GLiNER and Natasha can be loaded from bind-mounted model directory via `GR_MODEL_DIR`.
+- GLiNER and Natasha can be loaded from local model directory via `GR_MODEL_DIR`.
 
 ### CUDA mode (PyTriton)
 
 - `GR_RUNTIME_MODE=cuda`
 - Guardrails uses PyTriton client.
-- PyTriton server hosts GLiNER on GPU and can load it from `GR_MODEL_DIR`.
+- PyTriton server hosts GLiNER on GPU and can load it from local `GR_MODEL_DIR`.
 
 ## Air-gapped models
 
@@ -55,10 +55,12 @@ make download-models MODELS_DIR=./.models
 
 This writes a model bundle and `manifest.json` into `./.models`.
 
-Run service in offline mode with mounted models:
+Run service in offline mode on host:
 
 ```bash
-GR_MODELS_DIR=./.models GR_OFFLINE_MODE=true docker compose up -d redis guardrails
+make deps-up
+source .venv/bin/activate
+GR_MODEL_DIR=./.models GR_OFFLINE_MODE=true GR_REDIS_URL=redis://localhost:6379/0 uvicorn app.main:app --host 0.0.0.0 --port 8080
 ```
 
 ## Dataset Evaluation
@@ -113,47 +115,54 @@ make eval-finetuned-gliner FINETUNE_MODEL_REF=./reports/finetune/scanpatch_pipel
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -e '.[dev,ml]'
+make deps-up
 pytest tests/unit -q
+# run API (separate terminal)
+GR_REDIS_URL=redis://localhost:6379/0 uvicorn app.main:app --host 0.0.0.0 --port 8080
 ```
 
-## Docker Compose
+## Dependencies (Docker Compose)
 
-CPU mode:
+Compose is used only for infrastructure dependencies on dev machines.
+
+Start Redis:
 
 ```bash
-docker compose up -d redis guardrails
+docker compose up -d redis
 ```
 
-CUDA mode (PyTriton + guardrails CUDA client):
+Stop dependencies:
 
 ```bash
-docker compose --profile cuda up -d redis pytriton guardrails-cuda
+docker compose down --remove-orphans
 ```
 
-Offline mode (no HF network fetches, models from mount):
+Run PyTriton on host (for `GR_RUNTIME_MODE=cuda`):
 
 ```bash
-GR_MODELS_DIR=./.models GR_OFFLINE_MODE=true docker compose up -d redis guardrails
+source .venv/bin/activate
+GR_MODEL_DIR=./.models GR_OFFLINE_MODE=true GR_PYTRITON_DEVICE=cuda python -m app.pytriton_server.main
 ```
 
 Run integration tests:
 
 ```bash
-GR_MODELS_DIR=./.models GR_OFFLINE_MODE=true docker compose --profile test up --build --abort-on-container-exit --exit-code-from integration-tests integration-tests
+make test-integration
 ```
 
 Equivalent make targets:
 
 ```bash
 make download-models MODELS_DIR=./.models
-make dev-up
-make dev-up-cuda
+make deps-up
+make run-api
+make run-pytriton
 make test-integration
 make eval-scanpatch
 make eval-scanpatch-baseline
 ```
 
-`make test-integration` uses the local mounted model bundle and offline mode by default, so models are not re-downloaded on each run.
+`make test-integration` starts the API on host (`localhost:8080`) and runs integration tests against it.
 
 ## Key files
 

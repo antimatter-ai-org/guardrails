@@ -15,10 +15,9 @@ There is no per-model backend switch.
 
 ## Air-gapped model loading
 
-Both guardrails and PyTriton can load models from a mounted directory:
-- set `GR_MODEL_DIR=/models`
+Both guardrails and PyTriton can load models from a local directory:
+- set `GR_MODEL_DIR=/path/to/models`
 - set `GR_OFFLINE_MODE=true`
-- mount host directory with downloaded models to `/models`
 
 ## GLiNER behavior
 
@@ -46,18 +45,24 @@ Pluggability path:
 - Register binding in `app/pytriton_server/registry.py`.
 - Add corresponding runtime adapter if guardrails needs model-specific client preprocessing/postprocessing.
 
-## Docker usage
+## Local runtime usage
 
-CPU mode:
+Compose dependencies:
 
 ```bash
-docker compose up -d redis guardrails
+docker compose up -d redis
 ```
 
 CUDA mode with PyTriton:
 
 ```bash
-docker compose --profile cuda up -d redis pytriton guardrails-cuda
+python -m app.pytriton_server.main
+```
+
+Guardrails API (host process):
+
+```bash
+GR_REDIS_URL=redis://localhost:6379/0 uvicorn app.main:app --host 0.0.0.0 --port 8080
 ```
 
 ## Important env vars
@@ -65,16 +70,16 @@ docker compose --profile cuda up -d redis pytriton guardrails-cuda
 Guardrails CPU:
 - `GR_RUNTIME_MODE=cpu`
 - `GR_CPU_DEVICE=auto`
-- `GR_MODEL_DIR=/models`
+- `GR_MODEL_DIR=/path/to/models`
 - `GR_OFFLINE_MODE=true`
 
 Guardrails CUDA:
 - `GR_RUNTIME_MODE=cuda`
-- `GR_PYTRITON_URL=pytriton:8000`
+- `GR_PYTRITON_URL=localhost:8000`
 - `GR_PYTRITON_MODEL_NAME=gliner`
 - `GR_PYTRITON_INIT_TIMEOUT_S=30`
 - `GR_PYTRITON_INFER_TIMEOUT_S=60`
-- `GR_MODEL_DIR=/models`
+- `GR_MODEL_DIR=/path/to/models`
 - `GR_OFFLINE_MODE=true`
 
 PyTriton server:
@@ -82,5 +87,5 @@ PyTriton server:
 - `GR_PYTRITON_MODEL_REF=urchade/gliner_multi-v2.1`
 - `GR_PYTRITON_DEVICE=cuda`
 - `GR_PYTRITON_MAX_BATCH_SIZE=32`
-- `GR_MODEL_DIR=/models`
+- `GR_MODEL_DIR=/path/to/models`
 - `GR_OFFLINE_MODE=true`

@@ -1,4 +1,4 @@
-.PHONY: dev-up dev-up-cuda dev-down test-unit test-integration test-all download-models check-models eval-scanpatch eval-scanpatch-baseline eval-scanpatch-cascade finetune-prepare-scanpatch finetune-scanpatch-pipeline eval-finetuned-gliner
+.PHONY: deps-up deps-down dev-up dev-down run-api run-pytriton test-unit test-integration test-all download-models check-models eval-scanpatch eval-scanpatch-baseline eval-scanpatch-cascade finetune-prepare-scanpatch finetune-scanpatch-pipeline eval-finetuned-gliner
 
 MODELS_DIR ?= ./.models
 POLICY_PATH ?= ./configs/policy.yaml
@@ -8,8 +8,7 @@ FINETUNE_OUTPUT_DIR ?= ./reports/finetune/scanpatch_pipeline
 FINETUNE_MODEL_REF ?= ./reports/finetune/scanpatch_pipeline/runs/iter_01/final
 
 download-models:
-	docker compose build guardrails
-	docker run --rm -v $(PWD)/$(MODELS_DIR):/models guardrails-guardrails:latest python -m app.tools.download_models --output-dir /models --policy-path $(POLICY_PATH)
+	. .venv/bin/activate && python -m app.tools.download_models --output-dir $(MODELS_DIR) --policy-path $(POLICY_PATH)
 
 check-models:
 	@test -f "$(MODELS_DIR)/manifest.json" || (echo "Model bundle not found at $(MODELS_DIR). Run: make download-models MODELS_DIR=$(MODELS_DIR)" && exit 1)
@@ -18,16 +17,28 @@ test-unit:
 	. .venv/bin/activate && pytest tests/unit -q
 
 dev-up:
-	docker compose up -d redis guardrails
+	docker compose up -d --remove-orphans redis
 
-dev-up-cuda:
-	docker compose --profile cuda up -d redis pytriton guardrails-cuda
+deps-up: dev-up
+
+run-api:
+	. .venv/bin/activate && uvicorn app.main:app --host 0.0.0.0 --port 8080
+
+run-pytriton:
+	. .venv/bin/activate && python -m app.pytriton_server.main
 
 dev-down:
 	docker compose down --remove-orphans
 
-test-integration: check-models
-	GR_MODELS_DIR=$(MODELS_DIR) GR_OFFLINE_MODE=true docker compose --profile test up --build --abort-on-container-exit --exit-code-from integration-tests integration-tests
+deps-down: dev-down
+
+test-integration: deps-up
+	@set -e; \
+	. .venv/bin/activate; \
+	GR_REDIS_URL=redis://localhost:6379/0 uvicorn app.main:app --host 127.0.0.1 --port 8080 >/tmp/guardrails-integration.log 2>&1 & \
+	APP_PID=$$!; \
+	trap 'kill $$APP_PID >/dev/null 2>&1 || true' EXIT; \
+	GUARDRAILS_BASE_URL=http://127.0.0.1:8080 pytest tests/integration -q
 
 test-all: test-unit test-integration
 
