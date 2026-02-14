@@ -55,6 +55,8 @@ def _build_detector(name: str, definition: DetectorDefinition) -> Detector:
         )
     if detector_type == "gliner":
         model_name = str(params.get("model_name", "urchade/gliner_multi-v2.1"))
+        raw_chunking = params.get("chunking", {})
+        chunking = raw_chunking if isinstance(raw_chunking, Mapping) else {}
         return GlinerDetector(
             name=name,
             model_name=resolve_gliner_model_source(
@@ -70,6 +72,11 @@ def _build_detector(name: str, definition: DetectorDefinition) -> Detector:
             pytriton_model_name=settings.pytriton_gliner_model_name,
             pytriton_init_timeout_s=settings.pytriton_init_timeout_s,
             pytriton_infer_timeout_s=settings.pytriton_infer_timeout_s,
+            chunking_enabled=bool(chunking.get("enabled", True)),
+            chunking_max_tokens=int(chunking.get("max_tokens", 320)),
+            chunking_overlap_tokens=int(chunking.get("overlap_tokens", 64)),
+            chunking_max_chunks=int(chunking.get("max_chunks", 64)),
+            chunking_boundary_lookback_tokens=int(chunking.get("boundary_lookback_tokens", 24)),
         )
 
     raise ValueError(f"Unsupported detector type: {detector_type}")

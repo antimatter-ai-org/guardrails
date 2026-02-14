@@ -212,3 +212,9 @@ detector_definitions:
         - "passport number"
         - "credit card number"
         - "api key"
+      chunking:
+        enabled: true
+        max_tokens: 320
+        overlap_tokens: 64
+        max_chunks: 64
+        boundary_lookback_tokens: 24

@@ -189,6 +189,14 @@ Configured candidate labels:
 Runtime behavior:
 - CPU mode: in-process GLiNER inference.
 - GPU mode: inference through PyTriton model server.
+- Long texts: processed with chunking + overlap + span deduplication before final merge.
+
+Optional chunking config (`detector_definitions.<name>.params.chunking`):
+- `enabled` (bool, default `true`)
+- `max_tokens` (int, default `320`)
+- `overlap_tokens` (int, default `64`)
+- `max_chunks` (int, default `64`)
+- `boundary_lookback_tokens` (int, default `24`)
 
 Concrete emitted labels (with current prefixing rule):
 - `GLINER_person`

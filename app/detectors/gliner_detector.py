@@ -18,6 +18,11 @@ class GlinerDetector(Detector):
         pytriton_model_name: str = "gliner",
         pytriton_init_timeout_s: float = 20.0,
         pytriton_infer_timeout_s: float = 30.0,
+        chunking_enabled: bool = True,
+        chunking_max_tokens: int = 320,
+        chunking_overlap_tokens: int = 64,
+        chunking_max_chunks: int = 64,
+        chunking_boundary_lookback_tokens: int = 24,
     ) -> None:
         super().__init__(name)
         self._runtime = build_gliner_runtime(
@@ -28,6 +33,11 @@ class GlinerDetector(Detector):
             pytriton_model_name=pytriton_model_name,
             pytriton_init_timeout_s=pytriton_init_timeout_s,
             pytriton_infer_timeout_s=pytriton_infer_timeout_s,
+            chunking_enabled=chunking_enabled,
+            chunking_max_tokens=chunking_max_tokens,
+            chunking_overlap_tokens=chunking_overlap_tokens,
+            chunking_max_chunks=chunking_max_chunks,
+            chunking_boundary_lookback_tokens=chunking_boundary_lookback_tokens,
         )
         self._labels = labels
         self._threshold = threshold
