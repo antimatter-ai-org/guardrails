@@ -1,0 +1,131 @@
+version: 1
+default_policy: external_default
+
+routing:
+  external_model_patterns:
+    - "^openrouter/"
+    - "^external/"
+    - "^gpt-"
+    - "^anthropic/"
+  onprem_model_patterns:
+    - "^onprem/"
+    - "^local/"
+  default_destination: external
+
+policies:
+  external_default:
+    mode: mask
+    min_score: 0.55
+    storage_ttl_seconds: 3600
+    placeholder_prefix: "GR"
+    detectors:
+      - ru_pii_regex
+      - en_pii_regex
+      - code_secret_regex
+      - high_entropy_secret
+      - natasha_ner_ru
+      - gliner_pii_multilingual
+
+  onprem_default:
+    mode: passthrough
+    min_score: 1.0
+    storage_ttl_seconds: 300
+    placeholder_prefix: "GR"
+    detectors: []
+
+detector_definitions:
+  ru_pii_regex:
+    type: regex
+    enabled: true
+    params:
+      patterns:
+        - name: ru_phone
+          label: RU_PHONE
+          pattern: "(?<!\\d)(?:\\+7|8)[\\s(]*\\d{3}[\\s)-]*\\d{3}[\\s-]*\\d{2}[\\s-]*\\d{2}(?!\\d)"
+          score: 0.94
+        - name: ru_passport
+          label: RU_PASSPORT
+          pattern: "(?<!\\d)\\d{4}[\\s-]?\\d{6}(?!\\d)"
+          score: 0.97
+        - name: ru_snils
+          label: RU_SNILS
+          pattern: "(?<!\\d)\\d{3}-\\d{3}-\\d{3}[\\s-]?\\d{2}(?!\\d)"
+          score: 0.98
+        - name: ru_inn
+          label: RU_INN
+          pattern: "(?<!\\d)(?:\\d{10}|\\d{12})(?!\\d)"
+          score: 0.78
+        - name: ru_ogrn
+          label: RU_OGRN
+          pattern: "(?<!\\d)(?:\\d{13}|\\d{15})(?!\\d)"
+          score: 0.78
+        - name: bank_card
+          label: PAYMENT_CARD
+          pattern: "(?<!\\d)(?:\\d[ -]*?){13,19}(?!\\d)"
+          score: 0.75
+        - name: email
+          label: EMAIL
+          pattern: "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"
+          flags: ["IGNORECASE"]
+          score: 0.96
+
+  en_pii_regex:
+    type: regex
+    enabled: true
+    params:
+      patterns:
+        - name: us_ssn
+          label: US_SSN
+          pattern: "(?<!\\d)\\d{3}-\\d{2}-\\d{4}(?!\\d)"
+          score: 0.99
+        - name: iban
+          label: IBAN
+          pattern: "\\b[A-Z]{2}\\d{2}[A-Z0-9]{11,30}\\b"
+          score: 0.83
+        - name: swift
+          label: SWIFT
+          pattern: "\\b[A-Z]{6}[A-Z0-9]{2}(?:[A-Z0-9]{3})?\\b"
+          score: 0.78
+        - name: intl_phone
+          label: PHONE
+          pattern: "(?<!\\d)\\+?\\d[\\d(). -]{8,}\\d(?!\\d)"
+          score: 0.65
+
+  code_secret_regex:
+    type: secret_regex
+    enabled: true
+    params:
+      patterns:
+        - name: jwt
+          label: SECRET_JWT
+          pattern: "\\beyJ[A-Za-z0-9_-]{10,}\\.[A-Za-z0-9_-]{10,}\\.[A-Za-z0-9_-]{10,}\\b"
+          score: 0.97
+
+  high_entropy_secret:
+    type: entropy
+    enabled: true
+    params:
+      min_length: 24
+      entropy_threshold: 3.7
+
+  natasha_ner_ru:
+    type: natasha
+    enabled: true
+    params:
+      score: 0.68
+
+  gliner_pii_multilingual:
+    type: gliner
+    enabled: false
+    params:
+      model_name: "urchade/gliner_multi-v2.1"
+      threshold: 0.62
+      labels:
+        - "person"
+        - "organization"
+        - "location"
+        - "email"
+        - "phone number"
+        - "passport number"
+        - "credit card number"
+        - "api key"
