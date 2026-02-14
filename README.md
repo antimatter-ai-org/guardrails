@@ -61,6 +61,31 @@ Run service in offline mode with mounted models:
 GR_MODELS_DIR=./.models GR_OFFLINE_MODE=true docker compose up -d redis guardrails
 ```
 
+## Dataset Evaluation
+
+Manual evaluation framework supports dataset adapters and unified report outputs (JSON + Markdown).
+
+Setup once:
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -e '.[ml,eval,dev]'
+cp .env.eval.example .env.eval
+# set HF_TOKEN in .env.eval
+```
+
+Run first dataset evaluation:
+
+```bash
+make eval-scanpatch
+```
+
+What it does:
+- Downloads dataset automatically with Hugging Face token from `.env.eval`.
+- Reuses local dataset cache at `.eval_cache/` (no re-download on subsequent runs).
+- Writes report files to `reports/evaluations/`.
+
 ## Local run
 
 ```bash
@@ -114,6 +139,8 @@ make test-integration
 - `app/detectors/*`: detector plugins
 - `app/runtime/*`: runtime selection and adapters
 - `app/pytriton_server/*`: PyTriton model server and model registry
+- `app/eval/*`: manual dataset evaluation framework
 - `configs/policy.yaml`: policy + detector definitions
 - `docs/DETECTORS.md`: detector catalog and labels
 - `docs/GPU_SUPPORT.md`: PyTriton runtime details
+- `docs/EVALUATION.md`: evaluation architecture and report format

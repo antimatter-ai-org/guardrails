@@ -8,3 +8,6 @@ __pycache__/
 htmlcov/
 .idea/
 .models/
+.env.eval
+.eval_cache/
+reports/evaluations/

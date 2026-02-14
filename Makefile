@@ -1,7 +1,9 @@
-.PHONY: dev-up dev-up-gpu dev-down test-unit test-integration test-all download-models check-models
+.PHONY: dev-up dev-up-gpu dev-down test-unit test-integration test-all download-models check-models eval-scanpatch
 
 MODELS_DIR ?= ./.models
 POLICY_PATH ?= ./configs/policy.yaml
+EVAL_ENV_FILE ?= ./.env.eval
+EVAL_OUTPUT_DIR ?= ./reports/evaluations
 
 download-models:
 	docker compose build guardrails
@@ -26,3 +28,6 @@ test-integration: check-models
 	GR_MODELS_DIR=$(MODELS_DIR) GR_OFFLINE_MODE=true docker compose --profile test up --build --abort-on-container-exit --exit-code-from integration-tests integration-tests
 
 test-all: test-unit test-integration
+
+eval-scanpatch:
+	. .venv/bin/activate && python -m app.eval.run --dataset scanpatch/pii-ner-corpus-synthetic-controlled --split test --policy-path $(POLICY_PATH) --policy-name external_default --env-file $(EVAL_ENV_FILE) --output-dir $(EVAL_OUTPUT_DIR)
