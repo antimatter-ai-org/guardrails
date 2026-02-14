@@ -56,6 +56,57 @@ Examples:
 - Text: `BIC DEUTDEFF` -> label `SWIFT`
 - Text: `Call me at +1 (415) 555-0123` -> label `PHONE`
 
+## Detector: `identifier_regex`
+
+Type: `regex`
+
+Purpose:
+- Detect military IDs, vehicle numbers, VINs, and document identifiers not covered by base RU/EN patterns.
+
+Concrete labels used:
+- `MILITARY_INDIVIDUAL_NUMBER`
+- `VEHICLE_NUMBER`
+- `VEHICLE_VIN`
+- `DOCUMENT_NUMBER`
+
+Examples:
+- Text: `в/ч-5211` -> label `MILITARY_INDIVIDUAL_NUMBER`
+- Text: `59-БП-663` -> label `MILITARY_INDIVIDUAL_NUMBER`
+- Text: `КА9914МВ` -> label `VEHICLE_NUMBER`
+- Text: `TMBJG7NE5J0146321` -> label `VEHICLE_VIN`
+- Text: `UPZ-11903` -> label `DOCUMENT_NUMBER`
+
+## Detector: `network_pii_regex`
+
+Type: `regex`
+
+Purpose:
+- Detect IPv4/IPv6 addresses and CIDR ranges.
+
+Concrete labels used:
+- `IP_ADDRESS`
+
+Examples:
+- Text: `193.51.208.14` -> label `IP_ADDRESS`
+- Text: `100.64.0.0/10` -> label `IP_ADDRESS`
+- Text: `2a00:1450::401:9c` -> label `IP_ADDRESS`
+
+## Detector: `date_pii_regex`
+
+Type: `regex`
+
+Purpose:
+- Detect structured date formats in Russian and English text.
+
+Concrete labels used:
+- `DATE`
+
+Examples:
+- Text: `12.03.2022` -> label `DATE`
+- Text: `2024.Q3` -> label `DATE`
+- Text: `11/2024` -> label `DATE`
+- Text: `2021–2022 годах` -> label `DATE`
+
 ## Detector: `code_secret_regex`
 
 Type: `secret_regex`
@@ -123,7 +174,7 @@ Default status:
 - Enabled in default policy (`configs/policy.yaml`).
 
 Purpose:
-- Optional multilingual transformer-based entity detector for additional recall.
+- Multilingual transformer-based entity detector for additional recall.
 
 Configured candidate labels:
 - `person`

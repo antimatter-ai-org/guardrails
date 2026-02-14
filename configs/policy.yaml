@@ -9,6 +9,9 @@ policies:
     placeholder_prefix: "GR"
     detectors:
       - ru_pii_regex
+      - identifier_regex
+      - network_pii_regex
+      - date_pii_regex
       - en_pii_regex
       - code_secret_regex
       - high_entropy_secret
@@ -29,6 +32,9 @@ policies:
     placeholder_prefix: "GR"
     detectors:
       - ru_pii_regex
+      - identifier_regex
+      - network_pii_regex
+      - date_pii_regex
       - en_pii_regex
       - code_secret_regex
 
@@ -87,8 +93,86 @@ detector_definitions:
           score: 0.78
         - name: intl_phone
           label: PHONE
-          pattern: "(?<!\\d)\\+?\\d[\\d(). -]{8,}\\d(?!\\d)"
-          score: 0.65
+          pattern: "(?<!\\d)(?:\\+\\d{1,3}[\\s-]?)?(?:\\(\\d{2,4}\\)|\\d{2,4})[\\s-]\\d{2,4}[\\s-]\\d{2,4}(?:[\\s-]\\d{1,4})?(?!\\d)"
+          score: 0.72
+
+  identifier_regex:
+    type: regex
+    enabled: true
+    params:
+      patterns:
+        - name: military_number_ru_compact
+          label: MILITARY_INDIVIDUAL_NUMBER
+          pattern: "(?i)\\bв/ч[- ]?\\d{3,6}\\b"
+          score: 0.93
+        - name: military_number_hyphen
+          label: MILITARY_INDIVIDUAL_NUMBER
+          pattern: "(?i)\\b(?:\\d{2}-[A-ZА-ЯЁ]{2}-\\d{3,6}|[A-ZА-ЯЁ]{2}-\\d{3,6})\\b"
+          score: 0.9
+        - name: vehicle_plate_ru_ua
+          label: VEHICLE_NUMBER
+          pattern: "(?i)\\b[АВЕКМНОРСТУХABEKMHOPCTYX]{1,2}\\s?\\d{3,4}\\s?[АВЕКМНОРСТУХABEKMHOPCTYX]{1,2}\\b"
+          score: 0.9
+        - name: vehicle_vin
+          label: VEHICLE_VIN
+          pattern: "\\b[A-HJ-NPR-Z0-9]{17}\\b"
+          score: 0.96
+        - name: document_series_number
+          label: DOCUMENT_NUMBER
+          pattern: "(?<!\\d)\\d{2}\\s?\\d{2}\\s?№\\s?\\d{4,8}(?!\\d)"
+          score: 0.93
+        - name: document_code_hyphen
+          label: DOCUMENT_NUMBER
+          pattern: "(?i)\\b[A-ZА-ЯЁ]{2,5}-\\d{3,}\\b"
+          score: 0.84
+        - name: document_numeric_hyphen
+          label: DOCUMENT_NUMBER
+          pattern: "(?<!\\d)\\d{5,}(?:-\\d{1,4}){1,4}(?!\\d)"
+          score: 0.82
+
+  network_pii_regex:
+    type: regex
+    enabled: true
+    params:
+      patterns:
+        - name: ipv4_or_cidr
+          label: IP_ADDRESS
+          pattern: "(?<![\\d.])(?:25[0-5]|2[0-4]\\d|1\\d\\d|[1-9]?\\d)(?:\\.(?:25[0-5]|2[0-4]\\d|1\\d\\d|[1-9]?\\d)){3}(?:/(?:[0-9]|[12]\\d|3[0-2]))?(?![\\d.])"
+          score: 0.99
+        - name: ipv6_full
+          label: IP_ADDRESS
+          pattern: "(?i)\\b(?:[0-9a-f]{1,4}:){2,7}[0-9a-f]{1,4}\\b"
+          score: 0.97
+        - name: ipv6_compressed
+          label: IP_ADDRESS
+          pattern: "(?i)\\b(?:[0-9a-f]{1,4}:){1,7}:[0-9a-f:]{0,17}\\b"
+          score: 0.95
+
+  date_pii_regex:
+    type: regex
+    enabled: true
+    params:
+      patterns:
+        - name: date_iso_ymd
+          label: DATE
+          pattern: "(?<!\\d)(?:19|20)\\d{2}[-./](?:0?[1-9]|1[0-2])[-./](?:0?[1-9]|[12]\\d|3[01])(?!\\d)"
+          score: 0.96
+        - name: date_dmy
+          label: DATE
+          pattern: "(?<!\\d)(?:0?[1-9]|[12]\\d|3[01])[-./](?:0?[1-9]|1[0-2])[-./](?:19|20)?\\d{2}(?!\\d)"
+          score: 0.95
+        - name: date_month_year
+          label: DATE
+          pattern: "(?<!\\d)(?:0?[1-9]|1[0-2])[./](?:19|20)\\d{2}(?!\\d)"
+          score: 0.92
+        - name: date_quarter
+          label: DATE
+          pattern: "(?i)(?<!\\d)(?:19|20)\\d{2}[.\\-/\\s]?q[1-4](?!\\d)"
+          score: 0.88
+        - name: date_year_range
+          label: DATE
+          pattern: "(?<!\\d)(?:19|20)\\d{2}\\s*[–-]\\s*(?:19|20)\\d{2}(?:\\s*г(?:одах|ода|г)?)?"
+          score: 0.83
 
   code_secret_regex:
     type: secret_regex

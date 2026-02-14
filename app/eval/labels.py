@@ -12,12 +12,12 @@ def canonicalize_prediction_label(label: str) -> str | None:
         return "person"
     if normalized in {"ner_org"} or "organization" in normalized or "org" in normalized:
         return "organization"
-    if normalized in {"ner_loc"} or "location" in normalized or "address" in normalized:
-        return "location"
     if "ip" in normalized:
         return "ip"
     if "date" in normalized:
         return "date"
+    if normalized in {"ner_loc"} or "location" in normalized or "address" in normalized:
+        return "location"
     if "card" in normalized:
         return "payment_card"
 
@@ -32,6 +32,8 @@ def canonicalize_prediction_label(label: str) -> str | None:
         "swift",
         "tin",
         "vehicle",
+        "military",
+        "vin",
         "id",
     )
     if any(marker in normalized for marker in identifier_markers):
