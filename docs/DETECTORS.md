@@ -113,6 +113,7 @@ Examples:
 
 Notes:
 - This detector uses Natasha `NewsNERTagger` (which is backed by Slovnet models internally).
+- In air-gapped mode, Natasha model files are loaded from `GR_MODEL_DIR/natasha/...`.
 
 ## Detector: `gliner_pii_multilingual`
 

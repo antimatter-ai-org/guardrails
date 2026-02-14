@@ -17,8 +17,12 @@ services:
       GR_REDIS_URL: redis://redis:6379/0
       GR_RUNTIME_MODE: cpu
       GR_GLINER_CPU_DEVICE: cpu
+      GR_MODEL_DIR: /models
+      GR_OFFLINE_MODE: ${GR_OFFLINE_MODE:-false}
     ports:
       - "8080:8080"
+    volumes:
+      - ${GR_MODELS_DIR:-./.models}:/models:ro
     depends_on:
       redis:
         condition: service_healthy
@@ -38,10 +42,14 @@ services:
       GR_PYTRITON_GLINER_HF_MODEL_NAME: urchade/gliner_multi-v2.1
       GR_PYTRITON_DEVICE: cuda
       GR_PYTRITON_MAX_BATCH_SIZE: "32"
+      GR_MODEL_DIR: /models
+      GR_OFFLINE_MODE: ${GR_OFFLINE_MODE:-false}
     ports:
       - "8000:8000"
       - "8001:8001"
       - "8002:8002"
+    volumes:
+      - ${GR_MODELS_DIR:-./.models}:/models:ro
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/v2/health/ready').read()"]
       interval: 5s
@@ -64,8 +72,12 @@ services:
       GR_PYTRITON_GLINER_MODEL_NAME: gliner
       GR_PYTRITON_INIT_TIMEOUT_S: "30"
       GR_PYTRITON_INFER_TIMEOUT_S: "60"
+      GR_MODEL_DIR: /models
+      GR_OFFLINE_MODE: ${GR_OFFLINE_MODE:-false}
     ports:
       - "8081:8080"
+    volumes:
+      - ${GR_MODELS_DIR:-./.models}:/models:ro
     depends_on:
       redis:
         condition: service_healthy

@@ -10,6 +10,7 @@ from app.detectors.gliner_detector import GlinerDetector
 from app.detectors.natasha_detector import NatashaDetector
 from app.detectors.regex_detector import RegexDetector
 from app.detectors.secret_detector import SecretRegexDetector
+from app.model_assets import natasha_local_paths, resolve_gliner_model_source
 from app.settings import settings
 
 logger = logging.getLogger(__name__)
@@ -42,11 +43,25 @@ def _build_detector(name: str, definition: DetectorDefinition) -> Detector:
             pattern=str(params.get("pattern", r"\b[A-Za-z0-9_\-/+=]{20,}\b")),
         )
     if detector_type == "natasha":
-        return NatashaDetector(name=name, score=float(params.get("score", 0.7)))
+        embedding_path, ner_path = natasha_local_paths(
+            settings.model_dir,
+            strict=settings.offline_mode,
+        )
+        return NatashaDetector(
+            name=name,
+            score=float(params.get("score", 0.7)),
+            embedding_path=embedding_path,
+            ner_path=ner_path,
+        )
     if detector_type == "gliner":
+        model_name = str(params.get("model_name", "urchade/gliner_multi-v2.1"))
         return GlinerDetector(
             name=name,
-            model_name=str(params.get("model_name", "urchade/gliner_multi-v2.1")),
+            model_name=resolve_gliner_model_source(
+                model_name=model_name,
+                model_dir=settings.model_dir,
+                strict=settings.offline_mode,
+            ),
             labels=[str(item) for item in params.get("labels", [])],
             threshold=float(params.get("threshold", 0.5)),
             runtime_mode=settings.runtime_mode,

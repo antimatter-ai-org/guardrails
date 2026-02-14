@@ -5,7 +5,13 @@ from app.models.entities import Detection
 
 
 class NatashaDetector(Detector):
-    def __init__(self, name: str, score: float = 0.7) -> None:
+    def __init__(
+        self,
+        name: str,
+        score: float = 0.7,
+        embedding_path: str | None = None,
+        ner_path: str | None = None,
+    ) -> None:
         super().__init__(name)
         try:
             from natasha import Doc, NewsEmbedding, NewsNERTagger, Segmenter
@@ -14,8 +20,8 @@ class NatashaDetector(Detector):
 
         self._doc_cls = Doc
         self._segmenter = Segmenter()
-        embedding = NewsEmbedding()
-        self._tagger = NewsNERTagger(embedding)
+        embedding = NewsEmbedding(path=embedding_path) if embedding_path else NewsEmbedding()
+        self._tagger = NewsNERTagger(embedding, path=ner_path) if ner_path else NewsNERTagger(embedding)
         self._score = score
 
     def detect(self, text: str) -> list[Detection]:

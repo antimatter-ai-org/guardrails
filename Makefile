@@ -1,4 +1,11 @@
-.PHONY: dev-up dev-up-gpu dev-down test-unit test-integration test-all
+.PHONY: dev-up dev-up-gpu dev-down test-unit test-integration test-all download-models
+
+MODELS_DIR ?= ./.models
+POLICY_PATH ?= ./configs/policy.yaml
+
+download-models:
+	docker compose build guardrails
+	docker run --rm -v $(PWD)/$(MODELS_DIR):/models guardrails-guardrails:latest python -m app.tools.download_models --output-dir /models --policy-path $(POLICY_PATH)
 
 test-unit:
 	. .venv/bin/activate && pytest tests/unit -q

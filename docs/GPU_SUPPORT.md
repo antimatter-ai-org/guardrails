@@ -13,6 +13,13 @@ Use environment variable:
 
 There is no per-model backend switch.
 
+## Air-gapped model loading
+
+Both guardrails and PyTriton can load models from a mounted directory:
+- set `GR_MODEL_DIR=/models`
+- set `GR_OFFLINE_MODE=true`
+- mount host directory with downloaded models to `/models`
+
 ## GLiNER behavior
 
 GLiNER is enabled by default in `configs/policy.yaml`.
@@ -58,6 +65,8 @@ docker compose --profile gpu up -d redis pytriton guardrails-gpu
 Guardrails CPU:
 - `GR_RUNTIME_MODE=cpu`
 - `GR_GLINER_CPU_DEVICE=cpu`
+- `GR_MODEL_DIR=/models`
+- `GR_OFFLINE_MODE=true`
 
 Guardrails GPU:
 - `GR_RUNTIME_MODE=gpu`
@@ -65,9 +74,13 @@ Guardrails GPU:
 - `GR_PYTRITON_GLINER_MODEL_NAME=gliner`
 - `GR_PYTRITON_INIT_TIMEOUT_S=30`
 - `GR_PYTRITON_INFER_TIMEOUT_S=60`
+- `GR_MODEL_DIR=/models`
+- `GR_OFFLINE_MODE=true`
 
 PyTriton server:
 - `GR_PYTRITON_GLINER_MODEL_NAME=gliner`
 - `GR_PYTRITON_GLINER_HF_MODEL_NAME=urchade/gliner_multi-v2.1`
 - `GR_PYTRITON_DEVICE=cuda`
 - `GR_PYTRITON_MAX_BATCH_SIZE=32`
+- `GR_MODEL_DIR=/models`
+- `GR_OFFLINE_MODE=true`

@@ -15,6 +15,7 @@ from app.guardrails import (
     GuardrailsService,
     TextInput,
 )
+from app.model_assets import apply_model_env
 from app.models.api import (
     DetectRequest,
     DetectResponse,
@@ -79,6 +80,7 @@ def _load_runtime() -> None:
 
 @app.on_event("startup")
 async def startup() -> None:
+    apply_model_env(model_dir=settings.model_dir, offline_mode=settings.offline_mode)
     app.state.redis = Redis.from_url(settings.redis_url, decode_responses=False)
     app.state.mapping_store = RedisMappingStore(app.state.redis)
     _load_runtime()

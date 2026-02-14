@@ -37,13 +37,29 @@ Router call sequence:
 - `GR_RUNTIME_MODE=cpu`
 - GLiNER runs in-process with torch.
 - CPU/MPS device for GLiNER is controlled by `GR_GLINER_CPU_DEVICE` (`cpu` by default, `mps` optional).
-- GLiNER model is loaded lazily in background on first use; early requests may run without GLiNER until warm-up completes.
+- GLiNER and Natasha can be loaded from bind-mounted model directory via `GR_MODEL_DIR`.
 
 ### GPU mode (PyTriton)
 
 - `GR_RUNTIME_MODE=gpu`
 - Guardrails uses PyTriton client.
-- PyTriton server hosts GLiNER on GPU.
+- PyTriton server hosts GLiNER on GPU and can load it from `GR_MODEL_DIR`.
+
+## Air-gapped models
+
+Download all required models (GLiNER + Natasha) into a single directory:
+
+```bash
+make download-models MODELS_DIR=./.models
+```
+
+This writes a model bundle and `manifest.json` into `./.models`.
+
+Run service in offline mode with mounted models:
+
+```bash
+GR_MODELS_DIR=./.models GR_OFFLINE_MODE=true docker compose up -d redis guardrails
+```
 
 ## Local run
 
@@ -66,6 +82,12 @@ GPU mode (PyTriton + guardrails GPU client):
 
 ```bash
 docker compose --profile gpu up -d redis pytriton guardrails-gpu
+```
+
+Offline mode (no HF network fetches, models from mount):
+
+```bash
+GR_MODELS_DIR=./.models GR_OFFLINE_MODE=true docker compose up -d redis guardrails
 ```
 
 Run integration tests:
