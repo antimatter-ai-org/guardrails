@@ -93,6 +93,20 @@ What it does:
 - Writes report files to `reports/evaluations/`.
 - Includes detector-level and dataset-slice metrics in JSON reports.
 
+## GLiNER Fine-tuning
+
+Manual scripts are available for fine-tuning GLiNER on prepared datasets (including train-on-all/eval-on-all MVP feasibility runs).
+
+See:
+- `docs/FINETUNING.md`
+
+Quick start:
+
+```bash
+make finetune-scanpatch-pipeline
+make eval-finetuned-gliner FINETUNE_MODEL_REF=./reports/finetune/scanpatch_pipeline/runs/iter_01/final
+```
+
 ## Local run
 
 ```bash
@@ -149,7 +163,11 @@ make eval-scanpatch-baseline
 - `app/runtime/*`: runtime selection and adapters
 - `app/pytriton_server/*`: PyTriton model server and model registry
 - `app/eval/*`: manual dataset evaluation framework
+- `app/finetune/*`: GLiNER data prep, training, and evaluation helpers
+- `app/tools/run_scanpatch_gliner_finetune_pipeline.py`: end-to-end tuning pipeline
+- `app/tools/evaluate_finetuned_gliner.py`: evaluation-only script for existing GLiNER checkpoints
 - `configs/policy.yaml`: policy + detector definitions
 - `docs/DETECTORS.md`: detector catalog and labels
 - `docs/GPU_SUPPORT.md`: PyTriton runtime details
 - `docs/EVALUATION.md`: evaluation architecture and report format
+- `docs/FINETUNING.md`: GLiNER fine-tuning workflow

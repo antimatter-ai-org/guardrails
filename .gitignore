@@ -11,3 +11,4 @@ htmlcov/
 .env.eval
 .eval_cache/
 reports/evaluations/
+reports/finetune/

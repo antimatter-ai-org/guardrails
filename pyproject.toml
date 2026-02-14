@@ -26,6 +26,9 @@ ml = [
   "gliner>=0.2.11",
   "torch>=2.3.0",
 ]
+finetune = [
+  "accelerate>=0.34.0",
+]
 gpu = [
   "nvidia-pytriton>=0.7.0",
 ]
