@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Literal
 
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -16,15 +17,25 @@ class Settings(BaseSettings):
     policy_path: str = "configs/policy.yaml"
     redis_url: str = "redis://redis:6379/0"
 
-    runtime_mode: Literal["cpu", "gpu"] = "cpu"
+    runtime_mode: Literal["cpu", "cuda"] = "cpu"
     model_dir: str | None = None
     offline_mode: bool = False
 
-    gliner_cpu_device: str = "cpu"
+    cpu_device: str = "auto"
     pytriton_url: str = "localhost:8000"
     pytriton_init_timeout_s: float = 20.0
     pytriton_infer_timeout_s: float = 30.0
-    pytriton_gliner_model_name: str = "gliner"
+    pytriton_model_name: str = "gliner"
+
+    @field_validator("runtime_mode", mode="before")
+    @classmethod
+    def _normalize_runtime_mode(cls, value: str | None) -> str | None:
+        if value is None:
+            return value
+        normalized = str(value).strip().lower()
+        if normalized == "gpu":
+            return "cuda"
+        return normalized
 
 
 settings = Settings()

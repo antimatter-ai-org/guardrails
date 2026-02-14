@@ -1,4 +1,4 @@
-.PHONY: dev-up dev-up-gpu dev-down test-unit test-integration test-all download-models check-models eval-scanpatch eval-scanpatch-baseline eval-scanpatch-cascade finetune-prepare-scanpatch finetune-scanpatch-pipeline eval-finetuned-gliner
+.PHONY: dev-up dev-up-cuda dev-down test-unit test-integration test-all download-models check-models eval-scanpatch eval-scanpatch-baseline eval-scanpatch-cascade finetune-prepare-scanpatch finetune-scanpatch-pipeline eval-finetuned-gliner
 
 MODELS_DIR ?= ./.models
 POLICY_PATH ?= ./configs/policy.yaml
@@ -20,8 +20,8 @@ test-unit:
 dev-up:
 	docker compose up -d redis guardrails
 
-dev-up-gpu:
-	docker compose --profile gpu up -d redis pytriton guardrails-gpu
+dev-up-cuda:
+	docker compose --profile cuda up -d redis pytriton guardrails-cuda
 
 dev-down:
 	docker compose down --remove-orphans

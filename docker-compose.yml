@@ -16,7 +16,7 @@ services:
       GR_POLICY_PATH: /app/configs/policy.yaml
       GR_REDIS_URL: redis://redis:6379/0
       GR_RUNTIME_MODE: cpu
-      GR_GLINER_CPU_DEVICE: cpu
+      GR_CPU_DEVICE: auto
       GR_MODEL_DIR: /models
       GR_OFFLINE_MODE: ${GR_OFFLINE_MODE:-false}
     ports:
@@ -38,8 +38,8 @@ services:
       context: .
       dockerfile: Dockerfile.pytriton
     environment:
-      GR_PYTRITON_GLINER_MODEL_NAME: gliner
-      GR_PYTRITON_GLINER_HF_MODEL_NAME: urchade/gliner_multi-v2.1
+      GR_PYTRITON_MODEL_NAME: gliner
+      GR_PYTRITON_MODEL_REF: urchade/gliner_multi-v2.1
       GR_PYTRITON_DEVICE: cuda
       GR_PYTRITON_MAX_BATCH_SIZE: "32"
       GR_MODEL_DIR: /models
@@ -57,9 +57,9 @@ services:
       retries: 120
       start_period: 180s
     gpus: all
-    profiles: ["gpu"]
+    profiles: ["cuda"]
 
-  guardrails-gpu:
+  guardrails-cuda:
     build:
       context: .
       dockerfile: Dockerfile.gpu
@@ -67,9 +67,9 @@ services:
     environment:
       GR_POLICY_PATH: /app/configs/policy.yaml
       GR_REDIS_URL: redis://redis:6379/0
-      GR_RUNTIME_MODE: gpu
+      GR_RUNTIME_MODE: cuda
       GR_PYTRITON_URL: pytriton:8000
-      GR_PYTRITON_GLINER_MODEL_NAME: gliner
+      GR_PYTRITON_MODEL_NAME: gliner
       GR_PYTRITON_INIT_TIMEOUT_S: "30"
       GR_PYTRITON_INFER_TIMEOUT_S: "60"
       GR_MODEL_DIR: /models
@@ -89,7 +89,7 @@ services:
       timeout: 3s
       retries: 120
       start_period: 180s
-    profiles: ["gpu"]
+    profiles: ["cuda"]
 
   integration-tests:
     build: .

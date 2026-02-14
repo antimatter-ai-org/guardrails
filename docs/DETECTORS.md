@@ -188,7 +188,7 @@ Configured candidate labels:
 
 Runtime behavior:
 - CPU mode: in-process GLiNER inference.
-- GPU mode: inference through PyTriton model server.
+- CUDA mode: inference through PyTriton model server.
 - Long texts: processed with chunking + overlap + span deduplication before final merge.
 
 Optional chunking config (`detector_definitions.<name>.params.chunking`):

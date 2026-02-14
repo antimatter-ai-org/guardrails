@@ -8,7 +8,7 @@ from typing import Any
 import numpy as np
 
 from app.runtime.gliner_chunking import GlinerChunkingConfig, run_chunked_inference
-from app.runtime.torch_runtime import resolve_torch_device
+from app.runtime.torch_runtime import resolve_cpu_runtime_device
 
 
 class GlinerRuntime(ABC):
@@ -24,7 +24,7 @@ class LocalCpuGlinerRuntime(GlinerRuntime):
         preferred_device: str = "auto",
         chunking: GlinerChunkingConfig | None = None,
     ) -> None:
-        self.device = resolve_torch_device(preferred_device)
+        self.device = resolve_cpu_runtime_device(preferred_device)
         self._model_name = model_name
         self._chunking = (chunking or GlinerChunkingConfig()).normalized()
         self._model: Any | None = None
@@ -190,6 +190,8 @@ def build_gliner_runtime(
     chunking_boundary_lookback_tokens: int = 24,
 ) -> GlinerRuntime:
     mode = runtime_mode.strip().lower()
+    if mode == "gpu":
+        mode = "cuda"
     chunking = GlinerChunkingConfig(
         enabled=chunking_enabled,
         max_tokens=chunking_max_tokens,
@@ -205,7 +207,7 @@ def build_gliner_runtime(
             chunking=chunking,
         )
 
-    if mode == "gpu":
+    if mode == "cuda":
         return PyTritonGlinerRuntime(
             model_name=pytriton_model_name,
             pytriton_url=pytriton_url,
@@ -214,4 +216,4 @@ def build_gliner_runtime(
             chunking=chunking,
         )
 
-    raise ValueError("unsupported runtime mode, expected 'cpu' or 'gpu'")
+    raise ValueError("unsupported runtime mode, expected 'cpu' or 'cuda'")

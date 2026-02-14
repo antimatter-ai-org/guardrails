@@ -43,9 +43,21 @@ def test_auto_prefers_cuda_then_mps_then_cpu(monkeypatch: pytest.MonkeyPatch) ->
     assert torch_runtime.resolve_torch_device("auto") == "cpu"
 
 
+def test_cpu_runtime_auto_prefers_mps_then_cpu(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(torch_runtime, "_load_torch", lambda: _FakeTorch(cuda_available=True, mps_available=True))
+    assert torch_runtime.resolve_cpu_runtime_device("auto") == "mps"
+
+    monkeypatch.setattr(torch_runtime, "_load_torch", lambda: _FakeTorch(cuda_available=True, mps_available=False))
+    assert torch_runtime.resolve_cpu_runtime_device("auto") == "cpu"
+
+    monkeypatch.setattr(torch_runtime, "_load_torch", lambda: _FakeTorch(cuda_available=False, mps_available=False))
+    assert torch_runtime.resolve_cpu_runtime_device("auto") == "cpu"
+
+
 def test_auto_without_torch_falls_back_to_cpu(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(torch_runtime, "_load_torch", lambda: None)
     assert torch_runtime.resolve_torch_device("auto") == "cpu"
+    assert torch_runtime.resolve_cpu_runtime_device("auto") == "cpu"
 
 
 def test_explicit_unavailable_device_raises(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -61,3 +73,5 @@ def test_explicit_unavailable_device_raises(monkeypatch: pytest.MonkeyPatch) -> 
 def test_invalid_device_raises() -> None:
     with pytest.raises(ValueError):
         torch_runtime.resolve_torch_device("bad-device")
+    with pytest.raises(ValueError):
+        torch_runtime.resolve_cpu_runtime_device("bad-device")

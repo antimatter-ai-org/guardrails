@@ -1,15 +1,15 @@
 # GPU Support with PyTriton
 
 This project has one project-level runtime switch:
-- `cpu`: all detectors run in-process on CPU (Apple Silicon supported).
-- `gpu`: all supported GPU-capable models run through PyTriton.
+- `cpu`: all detectors run in-process via torch (Apple Silicon supported with MPS fallback).
+- `cuda`: all supported CUDA-capable models run through PyTriton.
 
 ## Runtime switch
 
 Use environment variable:
 
 - `GR_RUNTIME_MODE=cpu`
-- `GR_RUNTIME_MODE=gpu`
+- `GR_RUNTIME_MODE=cuda`
 
 There is no per-model backend switch.
 
@@ -26,12 +26,12 @@ GLiNER is enabled by default in `configs/policy.yaml`.
 
 - In `cpu` mode:
   - Guardrails process loads GLiNER locally with torch.
-  - Device selection uses `GR_GLINER_CPU_DEVICE` (`cpu` by default, `mps` optional on Apple Silicon).
+  - Device selection uses `GR_CPU_DEVICE` (`auto` by default; prefers `mps` on Apple Silicon, then `cpu`).
   - Model loading is lazy/background on first use to keep API startup fast.
 
-- In `gpu` mode:
+- In `cuda` mode:
   - Guardrails process uses PyTriton client.
-  - PyTriton server hosts GLiNER model on GPU.
+  - PyTriton server hosts GLiNER model on CUDA GPU.
 
 ## PyTriton services
 
@@ -54,32 +54,32 @@ CPU mode:
 docker compose up -d redis guardrails
 ```
 
-GPU mode with PyTriton:
+CUDA mode with PyTriton:
 
 ```bash
-docker compose --profile gpu up -d redis pytriton guardrails-gpu
+docker compose --profile cuda up -d redis pytriton guardrails-cuda
 ```
 
 ## Important env vars
 
 Guardrails CPU:
 - `GR_RUNTIME_MODE=cpu`
-- `GR_GLINER_CPU_DEVICE=cpu`
+- `GR_CPU_DEVICE=auto`
 - `GR_MODEL_DIR=/models`
 - `GR_OFFLINE_MODE=true`
 
-Guardrails GPU:
-- `GR_RUNTIME_MODE=gpu`
+Guardrails CUDA:
+- `GR_RUNTIME_MODE=cuda`
 - `GR_PYTRITON_URL=pytriton:8000`
-- `GR_PYTRITON_GLINER_MODEL_NAME=gliner`
+- `GR_PYTRITON_MODEL_NAME=gliner`
 - `GR_PYTRITON_INIT_TIMEOUT_S=30`
 - `GR_PYTRITON_INFER_TIMEOUT_S=60`
 - `GR_MODEL_DIR=/models`
 - `GR_OFFLINE_MODE=true`
 
 PyTriton server:
-- `GR_PYTRITON_GLINER_MODEL_NAME=gliner`
-- `GR_PYTRITON_GLINER_HF_MODEL_NAME=urchade/gliner_multi-v2.1`
+- `GR_PYTRITON_MODEL_NAME=gliner`
+- `GR_PYTRITON_MODEL_REF=urchade/gliner_multi-v2.1`
 - `GR_PYTRITON_DEVICE=cuda`
 - `GR_PYTRITON_MAX_BATCH_SIZE=32`
 - `GR_MODEL_DIR=/models`

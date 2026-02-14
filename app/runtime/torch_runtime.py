@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 _SUPPORTED_DEVICES = {"auto", "cpu", "cuda", "mps"}
+_SUPPORTED_CPU_RUNTIME_DEVICES = {"auto", "cpu", "mps"}
 
 
 def _load_torch() -> Any | None:
@@ -56,5 +57,25 @@ def resolve_torch_device(preferred_device: str = "auto") -> str:
     if cuda_available:
         return "cuda"
     if mps_available:
+        return "mps"
+    return "cpu"
+
+
+def resolve_cpu_runtime_device(preferred_device: str = "auto") -> str:
+    device = preferred_device.strip().lower()
+    if device not in _SUPPORTED_CPU_RUNTIME_DEVICES:
+        raise ValueError(
+            f"unsupported cpu runtime device '{preferred_device}', expected one of: {sorted(_SUPPORTED_CPU_RUNTIME_DEVICES)}"
+        )
+
+    if device == "cpu":
+        return "cpu"
+    if device == "mps":
+        return resolve_torch_device("mps")
+
+    torch_module = _load_torch()
+    if torch_module is None:
+        return "cpu"
+    if _is_mps_available(torch_module):
         return "mps"
     return "cpu"

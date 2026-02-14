@@ -18,8 +18,8 @@ Router call sequence:
 - RU/EN detector stack, including GLiNER enabled by default.
 - Streaming-safe unmasking with chunk boundary buffering.
 - Global runtime switch:
-  - `cpu`: in-process model execution (Apple Silicon supported)
-  - `gpu`: model execution through PyTriton
+  - `cpu`: in-process model execution (tries MPS on Apple Silicon)
+  - `cuda`: model execution through PyTriton
 
 ## API
 
@@ -36,12 +36,12 @@ Router call sequence:
 
 - `GR_RUNTIME_MODE=cpu`
 - GLiNER runs in-process with torch.
-- CPU/MPS device for GLiNER is controlled by `GR_GLINER_CPU_DEVICE` (`cpu` by default, `mps` optional).
+- Local torch device preference is controlled by `GR_CPU_DEVICE` (`auto` by default; prefers `mps` on Apple Silicon).
 - GLiNER and Natasha can be loaded from bind-mounted model directory via `GR_MODEL_DIR`.
 
-### GPU mode (PyTriton)
+### CUDA mode (PyTriton)
 
-- `GR_RUNTIME_MODE=gpu`
+- `GR_RUNTIME_MODE=cuda`
 - Guardrails uses PyTriton client.
 - PyTriton server hosts GLiNER on GPU and can load it from `GR_MODEL_DIR`.
 
@@ -124,10 +124,10 @@ CPU mode:
 docker compose up -d redis guardrails
 ```
 
-GPU mode (PyTriton + guardrails GPU client):
+CUDA mode (PyTriton + guardrails CUDA client):
 
 ```bash
-docker compose --profile gpu up -d redis pytriton guardrails-gpu
+docker compose --profile cuda up -d redis pytriton guardrails-cuda
 ```
 
 Offline mode (no HF network fetches, models from mount):
@@ -147,7 +147,7 @@ Equivalent make targets:
 ```bash
 make download-models MODELS_DIR=./.models
 make dev-up
-make dev-up-gpu
+make dev-up-cuda
 make test-integration
 make eval-scanpatch
 make eval-scanpatch-baseline
