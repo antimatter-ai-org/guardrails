@@ -119,3 +119,4 @@ docker compose --profile test up --build --abort-on-container-exit --exit-code-f
 - `app/storage/redis_store.py`: request/stream state in Redis
 - `app/detectors/*`: detector plugins
 - `configs/policy.yaml`: policy + detector definitions
+- `docs/DETECTORS.md`: detector catalog with labels and examples
