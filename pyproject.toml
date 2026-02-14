@@ -22,6 +22,8 @@ dependencies = [
   "gliner>=0.2.11",
   "torch>=2.3.0",
   "huggingface_hub>=0.25.0",
+  "phonenumbers>=8.13.0",
+  "dateparser>=1.2.0",
 ]
 
 [project.optional-dependencies]

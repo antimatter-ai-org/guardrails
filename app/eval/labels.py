@@ -4,6 +4,8 @@ from __future__ import annotations
 def canonicalize_prediction_label(label: str) -> str | None:
     normalized = label.strip().lower()
 
+    if normalized in {"full name", "first name", "middle name", "last name", "name", "name initials", "nickname"}:
+        return "person"
     if "email" in normalized:
         return "email"
     if "phone" in normalized:
@@ -16,7 +18,22 @@ def canonicalize_prediction_label(label: str) -> str | None:
         return "ip"
     if "date" in normalized:
         return "date"
-    if normalized in {"ner_loc"} or "location" in normalized or "address" in normalized:
+    if normalized in {
+        "ner_loc",
+        "city",
+        "district",
+        "street address",
+        "postal code",
+        "street",
+        "region",
+        "country",
+        "house",
+        "building",
+        "apartment",
+        "geolocation",
+    }:
+        return "location"
+    if "location" in normalized or "address" in normalized:
         return "location"
     if "card" in normalized:
         return "payment_card"

@@ -8,9 +8,54 @@ Maintenance rule:
 ## Label format
 
 - `regex` and `secret_regex` detectors emit labels exactly as configured in pattern definitions.
+- `phonenumber` detector emits a configured constant label (default `PHONE_LIB`).
+- `ipaddress` detector emits a configured constant label (default `IP_ADDRESS_LIB`).
+- `dateparser` detector emits a configured constant label (default `DATE_TEXT`).
 - `entropy` detector emits the constant label `SECRET_HIGH_ENTROPY`.
 - `natasha` detector emits `NER_{TYPE}` (for example `NER_PER`).
 - `gliner` detector emits `GLINER_{label_from_model}` (for example `GLINER_person`).
+
+## Detector: `phone_number_lib`
+
+Type: `phonenumber`
+
+Purpose:
+- Detect valid phone numbers using `phonenumbers` parsing/validation (multi-region).
+
+Concrete labels used:
+- `PHONE_LIB`
+
+Examples:
+- Text: `+380661998877` -> label `PHONE_LIB`
+- Text: `(044)987-65-43` -> label `PHONE_LIB`
+
+## Detector: `ip_address_lib`
+
+Type: `ipaddress`
+
+Purpose:
+- Detect valid IP addresses/CIDR ranges using Python `ipaddress` parsing.
+
+Concrete labels used:
+- `IP_ADDRESS_LIB`
+
+Examples:
+- Text: `2001:DB8::FFFF:10.10.2.1` -> label `IP_ADDRESS_LIB`
+- Text: `10.12.0.0/16` -> label `IP_ADDRESS_LIB`
+
+## Detector: `date_text_parser`
+
+Type: `dateparser`
+
+Purpose:
+- Detect textual date expressions in RU/UK/EN using `dateparser`.
+
+Concrete labels used:
+- `DATE_TEXT`
+
+Examples:
+- Text: `22 мая 1999 года` -> label `DATE_TEXT`
+- Text: `21 листопада 2023` -> label `DATE_TEXT`
 
 ## Detector: `ru_pii_regex`
 
@@ -178,10 +223,26 @@ Purpose:
 
 Configured candidate labels:
 - `person`
+- `full name`
+- `first name`
+- `last name`
+- `middle name`
 - `organization`
 - `location`
+- `address`
+- `street address`
+- `city`
+- `district`
+- `postal code`
+- `document number`
+- `tax identification number`
+- `snils`
+- `military number`
+- `vehicle number`
 - `email`
 - `phone number`
+- `ip address`
+- `date`
 - `passport number`
 - `credit card number`
 - `api key`
@@ -200,10 +261,26 @@ Optional chunking config (`detector_definitions.<name>.params.chunking`):
 
 Concrete emitted labels (with current prefixing rule):
 - `GLINER_person`
+- `GLINER_full name`
+- `GLINER_first name`
+- `GLINER_last name`
+- `GLINER_middle name`
 - `GLINER_organization`
 - `GLINER_location`
+- `GLINER_address`
+- `GLINER_street address`
+- `GLINER_city`
+- `GLINER_district`
+- `GLINER_postal code`
+- `GLINER_document number`
+- `GLINER_tax identification number`
+- `GLINER_snils`
+- `GLINER_military number`
+- `GLINER_vehicle number`
 - `GLINER_email`
 - `GLINER_phone number`
+- `GLINER_ip address`
+- `GLINER_date`
 - `GLINER_passport number`
 - `GLINER_credit card number`
 - `GLINER_api key`

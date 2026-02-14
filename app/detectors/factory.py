@@ -5,9 +5,12 @@ from collections.abc import Mapping
 
 from app.config import DetectorDefinition
 from app.detectors.base import Detector
+from app.detectors.dateparser_detector import DateParserDetector
 from app.detectors.entropy_detector import EntropyDetector
 from app.detectors.gliner_detector import GlinerDetector
+from app.detectors.ipaddress_detector import IPAddressDetector
 from app.detectors.natasha_detector import NatashaDetector
+from app.detectors.phonenumber_detector import PhoneNumberDetector
 from app.detectors.regex_detector import RegexDetector
 from app.detectors.secret_detector import SecretRegexDetector
 from app.model_assets import natasha_local_paths, resolve_gliner_model_source
@@ -33,6 +36,33 @@ def _build_detector(name: str, definition: DetectorDefinition) -> Detector:
 
     if detector_type == "regex":
         return RegexDetector(name=name, patterns=params.get("patterns", []))
+    if detector_type == "phonenumber":
+        raw_regions = params.get("regions", ["RU", "UA", "US", "GB", "DE", "PL", "KZ"])
+        regions = [str(item).strip().upper() for item in raw_regions if str(item).strip()]
+        return PhoneNumberDetector(
+            name=name,
+            score=float(params.get("score", 0.91)),
+            label=str(params.get("label", "PHONE_LIB")),
+            regions=regions,
+            min_digits=int(params.get("min_digits", 10)),
+        )
+    if detector_type == "dateparser":
+        raw_languages = params.get("languages", ["ru", "uk", "en"])
+        languages = [str(item).strip().lower() for item in raw_languages if str(item).strip()]
+        return DateParserDetector(
+            name=name,
+            score=float(params.get("score", 0.89)),
+            label=str(params.get("label", "DATE_TEXT")),
+            languages=languages,
+            min_chars=int(params.get("min_chars", 4)),
+            max_chars=int(params.get("max_chars", 48)),
+        )
+    if detector_type == "ipaddress":
+        return IPAddressDetector(
+            name=name,
+            score=float(params.get("score", 0.995)),
+            label=str(params.get("label", "IP_ADDRESS_LIB")),
+        )
     if detector_type == "secret_regex":
         return SecretRegexDetector(name=name, patterns=params.get("patterns"))
     if detector_type == "entropy":

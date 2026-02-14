@@ -8,6 +8,8 @@ policies:
     storage_ttl_seconds: 3600
     placeholder_prefix: "GR"
     detectors:
+      - phone_number_lib
+      - ip_address_lib
       - ru_pii_regex
       - identifier_regex
       - network_pii_regex
@@ -31,6 +33,8 @@ policies:
     storage_ttl_seconds: 3600
     placeholder_prefix: "GR"
     detectors:
+      - phone_number_lib
+      - ip_address_lib
       - ru_pii_regex
       - identifier_regex
       - network_pii_regex
@@ -39,6 +43,32 @@ policies:
       - code_secret_regex
 
 detector_definitions:
+  phone_number_lib:
+    type: phonenumber
+    enabled: true
+    params:
+      label: PHONE_LIB
+      score: 0.92
+      min_digits: 10
+      regions: ["RU", "UA", "US", "GB", "DE", "PL", "KZ"]
+
+  ip_address_lib:
+    type: ipaddress
+    enabled: true
+    params:
+      label: IP_ADDRESS_LIB
+      score: 0.995
+
+  date_text_parser:
+    type: dateparser
+    enabled: true
+    params:
+      label: DATE_TEXT
+      score: 0.89
+      languages: ["ru", "uk", "en"]
+      min_chars: 4
+      max_chars: 48
+
   ru_pii_regex:
     type: regex
     enabled: true
@@ -58,7 +88,7 @@ detector_definitions:
           score: 0.98
         - name: ru_inn
           label: RU_INN
-          pattern: "(?<!\\d)(?:\\d{10}|\\d{12})(?!\\d)"
+          pattern: "(?<![+\\d])(?:\\d{10}|\\d{12})(?!\\d)"
           score: 0.78
         - name: ru_ogrn
           label: RU_OGRN
@@ -94,7 +124,7 @@ detector_definitions:
         - name: intl_phone
           label: PHONE
           pattern: "(?<!\\d)(?:\\+\\d{1,3}[\\s-]?)?(?:\\(\\d{2,4}\\)|\\d{2,4})[\\s-]\\d{2,4}[\\s-]\\d{2,4}(?:[\\s-]\\d{1,4})?(?!\\d)"
-          score: 0.72
+          score: 0.68
 
   identifier_regex:
     type: regex
@@ -109,6 +139,10 @@ detector_definitions:
           label: MILITARY_INDIVIDUAL_NUMBER
           pattern: "(?i)\\b(?:\\d{2}-[A-ZА-ЯЁ]{2}-\\d{3,6}|[A-ZА-ЯЁ]{2}-\\d{3,6})\\b"
           score: 0.9
+        - name: military_number_space
+          label: MILITARY_INDIVIDUAL_NUMBER
+          pattern: "(?i)\\b[A-ZА-ЯЁ]{2}[ -]\\d{5,8}\\b"
+          score: 0.91
         - name: vehicle_plate_ru_ua
           label: VEHICLE_NUMBER
           pattern: "(?i)\\b[АВЕКМНОРСТУХABEKMHOPCTYX]{1,2}\\s?\\d{3,4}\\s?[АВЕКМНОРСТУХABEKMHOPCTYX]{1,2}\\b"
@@ -125,6 +159,10 @@ detector_definitions:
           label: DOCUMENT_NUMBER
           pattern: "(?i)\\b[A-ZА-ЯЁ]{2,5}-\\d{3,}\\b"
           score: 0.84
+        - name: document_code_slash
+          label: DOCUMENT_NUMBER
+          pattern: "(?i)\\b[A-ZА-ЯЁ]-\\d{2,4}/\\d{1,6}\\b"
+          score: 0.9
         - name: document_numeric_hyphen
           label: DOCUMENT_NUMBER
           pattern: "(?<!\\d)\\d{5,}(?:-\\d{1,4}){1,4}(?!\\d)"
@@ -155,24 +193,28 @@ detector_definitions:
       patterns:
         - name: date_iso_ymd
           label: DATE
-          pattern: "(?<!\\d)(?:19|20)\\d{2}[-./](?:0?[1-9]|1[0-2])[-./](?:0?[1-9]|[12]\\d|3[01])(?!\\d)"
+          pattern: "(?<!\\d)(?:18|19|20|21)\\d{2}[-./](?:0?[1-9]|1[0-2])[-./](?:0?[1-9]|[12]\\d|3[01])(?!\\d)"
           score: 0.96
         - name: date_dmy
           label: DATE
-          pattern: "(?<!\\d)(?:0?[1-9]|[12]\\d|3[01])[-./](?:0?[1-9]|1[0-2])[-./](?:19|20)?\\d{2}(?!\\d)"
+          pattern: "(?<!\\d)(?:0?[1-9]|[12]\\d|3[01])[-./](?:0?[1-9]|1[0-2])[-./](?:(?:18|19|20|21)\\d{2}|\\d{2})(?!\\d)"
           score: 0.95
         - name: date_month_year
           label: DATE
-          pattern: "(?<!\\d)(?:0?[1-9]|1[0-2])[./](?:19|20)\\d{2}(?!\\d)"
+          pattern: "(?<!\\d)(?:0?[1-9]|1[0-2])[./](?:18|19|20|21)\\d{2}(?!\\d)"
           score: 0.92
         - name: date_quarter
           label: DATE
-          pattern: "(?i)(?<!\\d)(?:19|20)\\d{2}[.\\-/\\s]?q[1-4](?!\\d)"
+          pattern: "(?i)(?<!\\d)(?:18|19|20|21)\\d{2}[.\\-/\\s]?q[1-4](?!\\d)"
           score: 0.88
         - name: date_year_range
           label: DATE
-          pattern: "(?<!\\d)(?:19|20)\\d{2}\\s*[–-]\\s*(?:19|20)\\d{2}(?:\\s*г(?:одах|ода|г)?)?"
+          pattern: "(?<!\\d)(?:18|19|20|21)\\d{2}\\s*[–-]\\s*(?:18|19|20|21)\\d{2}(?:\\s*г(?:одах|ода|г)?)?"
           score: 0.83
+        - name: date_textual_month_ru_uk_en
+          label: DATE
+          pattern: "(?iu)\\b(?:[0-2]?\\d|3[01])\\s+(?:января|февраля|марта|апреля|мая|июня|июля|августа|сентября|октября|ноября|декабря|січня|лютого|березня|квітня|травня|червня|липня|серпня|вересня|жовтня|листопада|грудня|january|february|march|april|may|june|july|august|september|october|november|december)\\s+(?:18|19|20|21)\\d{2}(?:\\s*г(?:ода|од|\\.)?)?\\b"
+          score: 0.94
 
   code_secret_regex:
     type: secret_regex
