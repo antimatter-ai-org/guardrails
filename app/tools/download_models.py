@@ -19,7 +19,7 @@ def _collect_gliner_models(policy_path: str) -> list[str]:
     for definition in config.detector_definitions.values():
         if definition.type.lower() != "gliner":
             continue
-        model_name = str(definition.params.get("model_name", "urchade/gliner_multi-v2.1"))
+        model_name = str(definition.params.get("model_name", "nvidia/gliner-PII"))
         models.add(model_name)
     return sorted(models)
 

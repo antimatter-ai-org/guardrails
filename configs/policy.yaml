@@ -201,7 +201,7 @@ detector_definitions:
     type: gliner
     enabled: true
     params:
-      model_name: "urchade/gliner_multi-v2.1"
+      model_name: "nvidia/gliner-PII"
       threshold: 0.62
       labels:
         - "person"

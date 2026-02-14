@@ -79,7 +79,7 @@ Guardrails GPU:
 
 PyTriton server:
 - `GR_PYTRITON_GLINER_MODEL_NAME=gliner`
-- `GR_PYTRITON_GLINER_HF_MODEL_NAME=urchade/gliner_multi-v2.1`
+- `GR_PYTRITON_GLINER_HF_MODEL_NAME=nvidia/gliner-PII`
 - `GR_PYTRITON_DEVICE=cuda`
 - `GR_PYTRITON_MAX_BATCH_SIZE=32`
 - `GR_MODEL_DIR=/models`

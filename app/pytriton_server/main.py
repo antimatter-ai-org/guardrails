@@ -17,7 +17,7 @@ def run() -> None:
         raise RuntimeError("PyTriton server runtime is not installed. Install with guardrails-service[gpu].") from exc
 
     gliner_triton_model_name = _env("GR_PYTRITON_GLINER_MODEL_NAME", "gliner")
-    gliner_hf_model_name = _env("GR_PYTRITON_GLINER_HF_MODEL_NAME", "urchade/gliner_multi-v2.1")
+    gliner_hf_model_name = _env("GR_PYTRITON_GLINER_HF_MODEL_NAME", "nvidia/gliner-PII")
     model_dir = os.getenv("GR_MODEL_DIR")
     offline_mode = _env("GR_OFFLINE_MODE", "false").strip().lower() in {"1", "true", "yes", "on"}
     device = _env("GR_PYTRITON_DEVICE", "cuda")
