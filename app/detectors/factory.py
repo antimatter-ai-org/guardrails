@@ -54,7 +54,7 @@ def _build_detector(name: str, definition: DetectorDefinition) -> Detector:
             ner_path=ner_path,
         )
     if detector_type == "gliner":
-        model_name = str(params.get("model_name", "nvidia/gliner-PII"))
+        model_name = str(params.get("model_name", "urchade/gliner_multi-v2.1"))
         return GlinerDetector(
             name=name,
             model_name=resolve_gliner_model_source(
