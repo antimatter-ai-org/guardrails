@@ -59,8 +59,8 @@ Run service in offline mode on host:
 
 ```bash
 make deps-up
-source .venv/bin/activate
-GR_MODEL_DIR=./.models GR_OFFLINE_MODE=true GR_REDIS_URL=redis://localhost:6379/0 uvicorn app.main:app --host 0.0.0.0 --port 8080
+uv sync --extra dev --extra eval --extra finetune
+GR_MODEL_DIR=./.models GR_OFFLINE_MODE=true GR_REDIS_URL=redis://localhost:6379/0 uv run uvicorn app.main:app --host 0.0.0.0 --port 8080
 ```
 
 ## Dataset Evaluation
@@ -70,9 +70,7 @@ Manual evaluation framework supports dataset adapters and unified report outputs
 Setup once:
 
 ```bash
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -e '.[ml,eval,dev]'
+uv sync --extra dev --extra eval
 cp .env.eval.example .env.eval
 # set HF_TOKEN in .env.eval
 ```
@@ -86,7 +84,7 @@ make eval-scanpatch
 Run cascade mode for throughput/quality tradeoff:
 
 ```bash
-python -m app.eval.run --dataset scanpatch/pii-ner-corpus-synthetic-controlled --split test --mode cascade --cascade-threshold 0.15
+uv run --extra eval python -m app.eval.run --dataset scanpatch/pii-ner-corpus-synthetic-controlled --split test --mode cascade --cascade-threshold 0.15
 ```
 
 What it does:
@@ -112,13 +110,11 @@ make eval-finetuned-gliner FINETUNE_MODEL_REF=./reports/finetune/scanpatch_pipel
 ## Local run
 
 ```bash
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -e '.[dev,ml]'
+uv sync --extra dev --extra eval --extra finetune
 make deps-up
-pytest tests/unit -q
+uv run --extra dev pytest tests/unit -q
 # run API (separate terminal)
-GR_REDIS_URL=redis://localhost:6379/0 uvicorn app.main:app --host 0.0.0.0 --port 8080
+GR_REDIS_URL=redis://localhost:6379/0 uv run uvicorn app.main:app --host 0.0.0.0 --port 8080
 ```
 
 ## Dependencies (Docker Compose)
@@ -140,8 +136,7 @@ docker compose down --remove-orphans
 Run PyTriton on host (for `GR_RUNTIME_MODE=cuda`):
 
 ```bash
-source .venv/bin/activate
-GR_MODEL_DIR=./.models GR_OFFLINE_MODE=true GR_PYTRITON_DEVICE=cuda python -m app.pytriton_server.main
+GR_MODEL_DIR=./.models GR_OFFLINE_MODE=true GR_PYTRITON_DEVICE=cuda uv run --extra cuda python -m app.pytriton_server.main
 ```
 
 Run integration tests:
@@ -180,3 +175,8 @@ make eval-scanpatch-baseline
 - `docs/GPU_SUPPORT.md`: PyTriton runtime details
 - `docs/EVALUATION.md`: evaluation architecture and report format
 - `docs/FINETUNING.md`: GLiNER fine-tuning workflow
+
+## Docker Images
+
+- `Dockerfile`: Guardrails API image (CPU/MPS runtime path inside app).
+- `Dockerfile.cuda`: PyTriton CUDA runtime image.

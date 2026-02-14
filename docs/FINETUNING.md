@@ -12,7 +12,7 @@ Important:
 Install with fine-tuning extras:
 
 ```bash
-pip install -e '.[ml,eval,finetune,dev]'
+uv sync --extra dev --extra eval --extra finetune
 ```
 
 ## 1) Prepare training data from Scanpatch
@@ -21,7 +21,7 @@ This converts Scanpatch spans into GLiNER training format (`tokenized_text` + `n
 All available splits are used.
 
 ```bash
-python -m app.tools.prepare_gliner_scanpatch_data \
+uv run --extra eval python -m app.tools.prepare_gliner_scanpatch_data \
   --dataset scanpatch/pii-ner-corpus-synthetic-controlled \
   --env-file .env.eval
 ```
@@ -33,7 +33,7 @@ Output defaults to:
 ## 2) Fine-tune model manually
 
 ```bash
-python -m app.tools.finetune_gliner \
+uv run --extra finetune python -m app.tools.finetune_gliner \
   --train-jsonl reports/finetune/scanpatch_all_splits_gliner_train.jsonl \
   --base-model urchade/gliner_multi-v2.1 \
   --run-name scanpatch_try_01 \
@@ -46,7 +46,7 @@ python -m app.tools.finetune_gliner \
 ## 3) Run end-to-end pipeline (prepare + iterative fine-tune + eval)
 
 ```bash
-python -m app.tools.run_scanpatch_gliner_finetune_pipeline \
+uv run --extra eval --extra finetune python -m app.tools.run_scanpatch_gliner_finetune_pipeline \
   --dataset scanpatch/pii-ner-corpus-synthetic-controlled \
   --env-file .env.eval \
   --output-dir reports/finetune/scanpatch_pipeline \
@@ -59,7 +59,7 @@ python -m app.tools.run_scanpatch_gliner_finetune_pipeline \
 For large train-on-all/eval-on-all runs, use fast exact metrics to avoid very slow overlap/per-label aggregation:
 
 ```bash
-python -m app.tools.run_scanpatch_gliner_finetune_pipeline \
+uv run --extra eval --extra finetune python -m app.tools.run_scanpatch_gliner_finetune_pipeline \
   --dataset scanpatch/pii-ner-corpus-synthetic-controlled \
   --env-file .env.eval \
   --output-dir reports/finetune/scanpatch_pipeline \
@@ -78,7 +78,7 @@ This produces:
 ## 4) Evaluate an existing checkpoint (no training)
 
 ```bash
-python -m app.tools.evaluate_finetuned_gliner \
+uv run --extra eval python -m app.tools.evaluate_finetuned_gliner \
   --model-ref reports/finetune/scanpatch_pipeline/runs/iter_01/final \
   --dataset scanpatch/pii-ner-corpus-synthetic-controlled \
   --env-file .env.eval \

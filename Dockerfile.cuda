@@ -1,4 +1,4 @@
-FROM python:3.11-slim
+FROM pytorch/pytorch:2.4.1-cuda12.1-cudnn9-runtime
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
@@ -12,10 +12,11 @@ COPY app ./app
 COPY configs ./configs
 COPY docs ./docs
 
-RUN uv sync --frozen --no-dev
+# Torch with CUDA is provided by the base image.
+RUN uv sync --frozen --no-dev --extra cuda
 
 ENV PATH="/app/.venv/bin:$PATH"
 
-EXPOSE 8080
+EXPOSE 8000 8001 8002
 
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8080"]
+CMD ["python", "-m", "app.pytriton_server.main"]

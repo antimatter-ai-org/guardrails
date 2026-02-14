@@ -19,17 +19,16 @@ dependencies = [
   "orjson>=3.10.6",
   "regex>=2024.5.15",
   "natasha>=1.6.0",
+  "gliner>=0.2.11",
+  "torch>=2.3.0",
+  "huggingface_hub>=0.25.0",
 ]
 
 [project.optional-dependencies]
-ml = [
-  "gliner>=0.2.11",
-  "torch>=2.3.0",
-]
 finetune = [
   "accelerate>=0.34.0",
 ]
-gpu = [
+cuda = [
   "nvidia-pytriton>=0.7.0",
 ]
 eval = [

@@ -16,7 +16,7 @@ class NatashaDetector(Detector):
         try:
             from natasha import Doc, NewsEmbedding, NewsNERTagger, Segmenter
         except Exception as exc:  # pragma: no cover - import path varies by env
-            raise RuntimeError("natasha is not installed. Install with guardrails-service[ml].") from exc
+            raise RuntimeError("natasha is not installed. Install project dependencies (for example: `uv sync`).") from exc
 
         self._doc_cls = Doc
         self._segmenter = Segmenter()

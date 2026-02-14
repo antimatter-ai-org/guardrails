@@ -56,13 +56,13 @@ docker compose up -d redis
 CUDA mode with PyTriton:
 
 ```bash
-python -m app.pytriton_server.main
+uv run --extra cuda python -m app.pytriton_server.main
 ```
 
 Guardrails API (host process):
 
 ```bash
-GR_REDIS_URL=redis://localhost:6379/0 uvicorn app.main:app --host 0.0.0.0 --port 8080
+GR_REDIS_URL=redis://localhost:6379/0 uv run uvicorn app.main:app --host 0.0.0.0 --port 8080
 ```
 
 ## Important env vars

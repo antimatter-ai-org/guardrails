@@ -14,7 +14,7 @@ def run() -> None:
     try:
         from pytriton.triton import Triton
     except Exception as exc:
-        raise RuntimeError("PyTriton server runtime is not installed. Install with guardrails-service[gpu].") from exc
+        raise RuntimeError("PyTriton server runtime is not installed. Install with guardrails-service[cuda].") from exc
 
     triton_model_name = _env("GR_PYTRITON_MODEL_NAME", "gliner")
     model_ref = _env("GR_PYTRITON_MODEL_REF", "urchade/gliner_multi-v2.1")

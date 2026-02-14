@@ -1,4 +1,4 @@
-.PHONY: deps-up deps-down dev-up dev-down run-api run-pytriton test-unit test-integration test-all download-models check-models eval-scanpatch eval-scanpatch-baseline eval-scanpatch-cascade finetune-prepare-scanpatch finetune-scanpatch-pipeline eval-finetuned-gliner
+.PHONY: sync deps-up deps-down dev-up dev-down run-api run-pytriton test-unit test-integration test-all download-models check-models eval-scanpatch eval-scanpatch-baseline eval-scanpatch-cascade finetune-prepare-scanpatch finetune-scanpatch-pipeline eval-finetuned-gliner
 
 MODELS_DIR ?= ./.models
 POLICY_PATH ?= ./configs/policy.yaml
@@ -7,14 +7,17 @@ EVAL_OUTPUT_DIR ?= ./reports/evaluations
 FINETUNE_OUTPUT_DIR ?= ./reports/finetune/scanpatch_pipeline
 FINETUNE_MODEL_REF ?= ./reports/finetune/scanpatch_pipeline/runs/iter_01/final
 
+sync:
+	uv sync --extra dev --extra eval --extra finetune
+
 download-models:
-	. .venv/bin/activate && python -m app.tools.download_models --output-dir $(MODELS_DIR) --policy-path $(POLICY_PATH)
+	uv run --extra eval python -m app.tools.download_models --output-dir $(MODELS_DIR) --policy-path $(POLICY_PATH)
 
 check-models:
 	@test -f "$(MODELS_DIR)/manifest.json" || (echo "Model bundle not found at $(MODELS_DIR). Run: make download-models MODELS_DIR=$(MODELS_DIR)" && exit 1)
 
 test-unit:
-	. .venv/bin/activate && pytest tests/unit -q
+	uv run --extra dev pytest tests/unit -q
 
 dev-up:
 	docker compose up -d --remove-orphans redis
@@ -22,10 +25,10 @@ dev-up:
 deps-up: dev-up
 
 run-api:
-	. .venv/bin/activate && uvicorn app.main:app --host 0.0.0.0 --port 8080
+	uv run --extra dev uvicorn app.main:app --host 0.0.0.0 --port 8080
 
 run-pytriton:
-	. .venv/bin/activate && python -m app.pytriton_server.main
+	uv run --extra cuda python -m app.pytriton_server.main
 
 dev-down:
 	docker compose down --remove-orphans
@@ -34,28 +37,27 @@ deps-down: dev-down
 
 test-integration: deps-up
 	@set -e; \
-	. .venv/bin/activate; \
-	GR_REDIS_URL=redis://localhost:6379/0 uvicorn app.main:app --host 127.0.0.1 --port 8080 >/tmp/guardrails-integration.log 2>&1 & \
+	uv run --extra dev env GR_REDIS_URL=redis://localhost:6379/0 uvicorn app.main:app --host 127.0.0.1 --port 8080 >/tmp/guardrails-integration.log 2>&1 & \
 	APP_PID=$$!; \
 	trap 'kill $$APP_PID >/dev/null 2>&1 || true' EXIT; \
-	GUARDRAILS_BASE_URL=http://127.0.0.1:8080 pytest tests/integration -q
+	uv run --extra dev env GUARDRAILS_BASE_URL=http://127.0.0.1:8080 pytest tests/integration -q
 
 test-all: test-unit test-integration
 
 eval-scanpatch:
-	. .venv/bin/activate && python -m app.eval.run --dataset scanpatch/pii-ner-corpus-synthetic-controlled --split test --policy-path $(POLICY_PATH) --policy-name external_default --mode baseline --env-file $(EVAL_ENV_FILE) --output-dir $(EVAL_OUTPUT_DIR)
+	uv run --extra eval python -m app.eval.run --dataset scanpatch/pii-ner-corpus-synthetic-controlled --split test --policy-path $(POLICY_PATH) --policy-name external_default --mode baseline --env-file $(EVAL_ENV_FILE) --output-dir $(EVAL_OUTPUT_DIR)
 
 eval-scanpatch-baseline:
-	. .venv/bin/activate && python -m app.eval.run --dataset scanpatch/pii-ner-corpus-synthetic-controlled --split test --policy-path $(POLICY_PATH) --policy-name external_default --mode baseline --env-file $(EVAL_ENV_FILE) --output-dir $(EVAL_OUTPUT_DIR)
+	uv run --extra eval python -m app.eval.run --dataset scanpatch/pii-ner-corpus-synthetic-controlled --split test --policy-path $(POLICY_PATH) --policy-name external_default --mode baseline --env-file $(EVAL_ENV_FILE) --output-dir $(EVAL_OUTPUT_DIR)
 
 eval-scanpatch-cascade:
-	. .venv/bin/activate && python -m app.eval.run --dataset scanpatch/pii-ner-corpus-synthetic-controlled --split test --policy-path $(POLICY_PATH) --policy-name external_default --mode cascade --cascade-threshold 0.15 --env-file $(EVAL_ENV_FILE) --output-dir $(EVAL_OUTPUT_DIR)
+	uv run --extra eval python -m app.eval.run --dataset scanpatch/pii-ner-corpus-synthetic-controlled --split test --policy-path $(POLICY_PATH) --policy-name external_default --mode cascade --cascade-threshold 0.15 --env-file $(EVAL_ENV_FILE) --output-dir $(EVAL_OUTPUT_DIR)
 
 finetune-prepare-scanpatch:
-	. .venv/bin/activate && python -m app.tools.prepare_gliner_scanpatch_data --dataset scanpatch/pii-ner-corpus-synthetic-controlled --env-file $(EVAL_ENV_FILE)
+	uv run --extra eval python -m app.tools.prepare_gliner_scanpatch_data --dataset scanpatch/pii-ner-corpus-synthetic-controlled --env-file $(EVAL_ENV_FILE)
 
 finetune-scanpatch-pipeline:
-	. .venv/bin/activate && python -m app.tools.run_scanpatch_gliner_finetune_pipeline --dataset scanpatch/pii-ner-corpus-synthetic-controlled --env-file $(EVAL_ENV_FILE) --output-dir $(FINETUNE_OUTPUT_DIR)
+	uv run --extra eval --extra finetune python -m app.tools.run_scanpatch_gliner_finetune_pipeline --dataset scanpatch/pii-ner-corpus-synthetic-controlled --env-file $(EVAL_ENV_FILE) --output-dir $(FINETUNE_OUTPUT_DIR)
 
 eval-finetuned-gliner:
-	. .venv/bin/activate && python -m app.tools.evaluate_finetuned_gliner --model-ref $(FINETUNE_MODEL_REF) --dataset scanpatch/pii-ner-corpus-synthetic-controlled --env-file $(EVAL_ENV_FILE) --output-dir $(FINETUNE_OUTPUT_DIR) --flat-ner --skip-overlap-metrics --skip-per-label-metrics
+	uv run --extra eval python -m app.tools.evaluate_finetuned_gliner --model-ref $(FINETUNE_MODEL_REF) --dataset scanpatch/pii-ner-corpus-synthetic-controlled --env-file $(EVAL_ENV_FILE) --output-dir $(FINETUNE_OUTPUT_DIR) --flat-ner --skip-overlap-metrics --skip-per-label-metrics

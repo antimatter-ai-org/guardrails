@@ -28,7 +28,9 @@ def _download_gliner_model(output_dir: str, model_name: str) -> str:
     try:
         from huggingface_hub import snapshot_download
     except Exception as exc:
-        raise RuntimeError("huggingface_hub is required. Install with guardrails-service[ml].") from exc
+        raise RuntimeError(
+            "huggingface_hub is required. Install project dependencies (for example: `uv sync --extra eval`)."
+        ) from exc
 
     local_dir = gliner_local_dir(output_dir, model_name)
     local_dir.parent.mkdir(parents=True, exist_ok=True)

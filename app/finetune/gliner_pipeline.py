@@ -119,7 +119,7 @@ def _word_boundaries(
     try:
         from gliner.data_processing.tokenizer import WordsSplitter
     except Exception as exc:
-        raise RuntimeError("gliner package is required. Install with guardrails-service[ml].") from exc
+        raise RuntimeError("gliner package is required. Install project dependencies (for example: `uv sync`).") from exc
 
     splitter = WordsSplitter(splitter_type=splitter_type)
     tokens: list[str] = []
@@ -319,7 +319,7 @@ def finetune_gliner_records(
     try:
         from gliner import GLiNER
     except Exception as exc:
-        raise RuntimeError("gliner package is required. Install with guardrails-service[ml].") from exc
+        raise RuntimeError("gliner package is required. Install project dependencies (for example: `uv sync`).") from exc
 
     if not records:
         raise ValueError("training records are empty")
@@ -424,7 +424,7 @@ def evaluate_model_on_eval_samples(
     try:
         from gliner import GLiNER
     except Exception as exc:
-        raise RuntimeError("gliner package is required. Install with guardrails-service[ml].") from exc
+        raise RuntimeError("gliner package is required. Install project dependencies (for example: `uv sync`).") from exc
 
     if not samples:
         raise ValueError("evaluation samples are empty")
@@ -490,7 +490,7 @@ def evaluate_model_builtin_f1(
     try:
         from gliner import GLiNER
     except Exception as exc:
-        raise RuntimeError("gliner package is required. Install with guardrails-service[ml].") from exc
+        raise RuntimeError("gliner package is required. Install project dependencies (for example: `uv sync`).") from exc
 
     model = GLiNER.from_pretrained(model_ref)
     resolved_device = resolve_torch_device(device)

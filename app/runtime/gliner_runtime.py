@@ -135,7 +135,7 @@ class PyTritonGlinerRuntime(GlinerRuntime):
         try:
             from pytriton.client import ModelClient
         except Exception as exc:
-            raise RuntimeError("PyTriton client is not installed. Install with guardrails-service[gpu].") from exc
+            raise RuntimeError("PyTriton client is not installed. Install with guardrails-service[cuda].") from exc
 
         if not texts:
             return []
