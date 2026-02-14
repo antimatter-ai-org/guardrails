@@ -1,4 +1,4 @@
-FROM pytorch/pytorch:2.4.1-cuda12.1-cudnn9-runtime
+FROM python:3.11-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -12,8 +12,7 @@ COPY configs ./configs
 COPY docs ./docs
 COPY tests ./tests
 
-# Torch with CUDA is provided by the base image. Install guardrails deps without reinstalling torch.
-RUN pip install --upgrade pip && pip install -e '.[dev,ml]'
+RUN pip install --upgrade pip && pip install -e '.[dev,gpu]'
 
 EXPOSE 8080
 

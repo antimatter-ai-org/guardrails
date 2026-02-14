@@ -12,21 +12,27 @@ class GlinerDetector(Detector):
         model_name: str,
         labels: list[str],
         threshold: float = 0.5,
-        backend: str = "local_torch",
-        device: str = "auto",
-        use_fp16_on_cuda: bool = False,
+        runtime_mode: str = "cpu",
+        cpu_device: str = "auto",
+        pytriton_url: str = "pytriton:8000",
+        pytriton_model_name: str = "gliner",
+        pytriton_init_timeout_s: float = 20.0,
+        pytriton_infer_timeout_s: float = 30.0,
     ) -> None:
         super().__init__(name)
         self._runtime = build_gliner_runtime(
-            backend=backend,
+            runtime_mode=runtime_mode,
             model_name=model_name,
-            preferred_device=device,
-            use_fp16_on_cuda=use_fp16_on_cuda,
+            cpu_device=cpu_device,
+            pytriton_url=pytriton_url,
+            pytriton_model_name=pytriton_model_name,
+            pytriton_init_timeout_s=pytriton_init_timeout_s,
+            pytriton_infer_timeout_s=pytriton_infer_timeout_s,
         )
         self._labels = labels
         self._threshold = threshold
-        self._backend = backend
-        self._device = getattr(self._runtime, "device", device)
+        self._runtime_mode = runtime_mode
+        self._device = getattr(self._runtime, "device", "unknown")
 
     def detect(self, text: str) -> list[Detection]:
         raw_predictions = self._runtime.predict_entities(text, self._labels, threshold=self._threshold)
@@ -40,7 +46,7 @@ class GlinerDetector(Detector):
                     label=f"GLINER_{pred['label']}",
                     score=float(pred.get("score", self._threshold)),
                     detector=self.name,
-                    metadata={"source": "gliner", "backend": self._backend, "device": self._device},
+                    metadata={"source": "gliner", "runtime_mode": self._runtime_mode, "device": self._device},
                 )
             )
         return findings

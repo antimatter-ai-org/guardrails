@@ -115,13 +115,10 @@ detector_definitions:
 
   gliner_pii_multilingual:
     type: gliner
-    enabled: false
+    enabled: true
     params:
       model_name: "urchade/gliner_multi-v2.1"
       threshold: 0.62
-      backend: "local_torch"
-      device: "auto"
-      use_fp16_on_cuda: false
       labels:
         - "person"
         - "organization"

@@ -119,8 +119,7 @@ Notes:
 Type: `gliner`
 
 Default status:
-- Disabled in baseline policy (`configs/policy.yaml`).
-- Enabled in full ML policies (`configs/policy.full.yaml` and GPU profile).
+- Enabled in default policy (`configs/policy.yaml`).
 
 Purpose:
 - Optional multilingual transformer-based entity detector for additional recall.
@@ -135,10 +134,9 @@ Configured candidate labels:
 - `credit card number`
 - `api key`
 
-Runtime params (current config):
-- `backend: local_torch`
-- `device: auto`
-- `use_fp16_on_cuda: false`
+Runtime behavior:
+- CPU mode: in-process GLiNER inference.
+- GPU mode: inference through PyTriton model server.
 
 Concrete emitted labels (with current prefixing rule):
 - `GLINER_person`

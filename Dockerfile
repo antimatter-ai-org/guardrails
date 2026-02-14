@@ -12,7 +12,7 @@ COPY configs ./configs
 COPY docs ./docs
 COPY tests ./tests
 
-RUN pip install --upgrade pip && pip install -e '.[dev]'
+RUN pip install --upgrade pip && pip install -e '.[dev,ml]'
 
 EXPOSE 8080
 

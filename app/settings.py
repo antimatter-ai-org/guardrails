@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Literal
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -14,9 +16,13 @@ class Settings(BaseSettings):
     policy_path: str = "configs/policy.yaml"
     redis_url: str = "redis://redis:6379/0"
 
-    gliner_backend: str = "local_torch"
-    gliner_device: str = "auto"
-    gliner_use_fp16_on_cuda: bool = False
+    runtime_mode: Literal["cpu", "gpu"] = "cpu"
+
+    gliner_cpu_device: str = "cpu"
+    pytriton_url: str = "localhost:8000"
+    pytriton_init_timeout_s: float = 20.0
+    pytriton_infer_timeout_s: float = 30.0
+    pytriton_gliner_model_name: str = "gliner"
 
 
 settings = Settings()

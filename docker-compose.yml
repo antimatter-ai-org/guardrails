@@ -15,6 +15,8 @@ services:
     environment:
       GR_POLICY_PATH: /app/configs/policy.yaml
       GR_REDIS_URL: redis://redis:6379/0
+      GR_RUNTIME_MODE: cpu
+      GR_GLINER_CPU_DEVICE: cpu
     ports:
       - "8080:8080"
     depends_on:
@@ -24,29 +26,30 @@ services:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/health').read()"]
       interval: 5s
       timeout: 3s
-      retries: 20
+      retries: 120
+      start_period: 180s
 
-  guardrails-ml-cpu:
+  pytriton:
     build:
       context: .
-      dockerfile: Dockerfile.ml
-    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8080"]
+      dockerfile: Dockerfile.pytriton
     environment:
-      GR_POLICY_PATH: /app/configs/policy.full.yaml
-      GR_REDIS_URL: redis://redis:6379/0
-      GR_GLINER_DEVICE: cpu
-      GR_GLINER_BACKEND: local_torch
+      GR_PYTRITON_GLINER_MODEL_NAME: gliner
+      GR_PYTRITON_GLINER_HF_MODEL_NAME: urchade/gliner_multi-v2.1
+      GR_PYTRITON_DEVICE: cuda
+      GR_PYTRITON_MAX_BATCH_SIZE: "32"
     ports:
-      - "8081:8080"
-    depends_on:
-      redis:
-        condition: service_healthy
+      - "8000:8000"
+      - "8001:8001"
+      - "8002:8002"
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/health').read()"]
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/v2/health/ready').read()"]
       interval: 5s
       timeout: 3s
-      retries: 20
-    profiles: ["ml-cpu"]
+      retries: 120
+      start_period: 180s
+    gpus: all
+    profiles: ["gpu"]
 
   guardrails-gpu:
     build:
@@ -54,22 +57,26 @@ services:
       dockerfile: Dockerfile.gpu
     command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8080"]
     environment:
-      GR_POLICY_PATH: /app/configs/policy.full.yaml
+      GR_POLICY_PATH: /app/configs/policy.yaml
       GR_REDIS_URL: redis://redis:6379/0
-      GR_GLINER_DEVICE: cuda
-      GR_GLINER_BACKEND: local_torch
-      GR_GLINER_USE_FP16_ON_CUDA: "true"
+      GR_RUNTIME_MODE: gpu
+      GR_PYTRITON_URL: pytriton:8000
+      GR_PYTRITON_GLINER_MODEL_NAME: gliner
+      GR_PYTRITON_INIT_TIMEOUT_S: "30"
+      GR_PYTRITON_INFER_TIMEOUT_S: "60"
     ports:
-      - "8082:8080"
+      - "8081:8080"
     depends_on:
       redis:
+        condition: service_healthy
+      pytriton:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/health').read()"]
       interval: 5s
       timeout: 3s
-      retries: 20
-    gpus: all
+      retries: 120
+      start_period: 180s
     profiles: ["gpu"]
 
   integration-tests:
