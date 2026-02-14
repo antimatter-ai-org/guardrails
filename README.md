@@ -93,15 +93,19 @@ GR_MODELS_DIR=./.models GR_OFFLINE_MODE=true docker compose up -d redis guardrai
 Run integration tests:
 
 ```bash
-docker compose --profile test up --build --abort-on-container-exit --exit-code-from integration-tests integration-tests
+GR_MODELS_DIR=./.models GR_OFFLINE_MODE=true docker compose --profile test up --build --abort-on-container-exit --exit-code-from integration-tests integration-tests
 ```
 
 Equivalent make targets:
 
 ```bash
+make download-models MODELS_DIR=./.models
 make dev-up
 make dev-up-gpu
+make test-integration
 ```
+
+`make test-integration` uses the local mounted model bundle and offline mode by default, so models are not re-downloaded on each run.
 
 ## Key files
 
