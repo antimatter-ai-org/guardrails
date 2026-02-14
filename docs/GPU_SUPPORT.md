@@ -88,8 +88,8 @@ Other viable choices depending on your constraints:
 References:
 - Triton dynamic batching and concurrent model execution: https://docs.nvidia.com/deeplearning/triton-inference-server/archives/triton-inference-server-2540/user-guide/docs/tutorials/Conceptual_Guide/Part_2-improving_resource_utilization/README.html
 - Ray Serve docs: https://docs.ray.io/en/master/serve/index.html
-- KServe docs: https://kserve.github.io/website/0.7/
-- vLLM docs: https://docs.vllm.ai/en/v0.6.0/
+- KServe project: https://github.com/kserve/kserve
+- vLLM docs: https://docs.vllm.ai/
 
 Recommended path for this project now:
 1. Keep `local_torch` runtime as default.
