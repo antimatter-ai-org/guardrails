@@ -14,6 +14,16 @@ This repository includes a manual evaluation framework to benchmark guardrails d
 
 - CLI: `python -m app.eval.run`
 - Shortcut: `make eval-scanpatch`
+- Baseline shortcut: `make eval-scanpatch-baseline`
+- Cascade shortcut: `make eval-scanpatch-cascade`
+
+Default evaluator mode is `baseline`:
+- All configured detectors run on every sample.
+
+Optional `cascade` mode:
+- Stage A runs lightweight detectors.
+- Stage B runs heavy detectors (GLiNER by default) only for uncertain samples.
+- Use `--mode cascade` to enable staged execution.
 
 ## Adapter Design
 
@@ -56,6 +66,12 @@ Top-level JSON fields:
 - `evaluation`
 - `metrics`
 - `errors_preview`
+- `detector_breakdown`
+- `dataset_slices`
+
+`evaluation` additions:
+- `mode`: `baseline` or `cascade`
+- `cascade` (only for cascade mode): threshold, detector stages, escalation count/ratio.
 
 ## Caching and Auth
 

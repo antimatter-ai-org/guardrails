@@ -140,7 +140,17 @@ class ScanpatchSyntheticControlledAdapter(DatasetAdapter):
                         tags.append(str(tag_item))
 
                 text, spans = _build_spans_from_bio_tags(tokens, tags)
-                samples.append(EvalSample(sample_id=row_id, text=text, gold_spans=spans))
+                samples.append(
+                    EvalSample(
+                        sample_id=row_id,
+                        text=text,
+                        gold_spans=spans,
+                        metadata={
+                            "source": row.get("source"),
+                            "noisy": row.get("noisy"),
+                        },
+                    )
+                )
             elif {"text", "entity_starts", "entity_ends", "entity_labels"}.issubset(row.keys()):
                 text = str(row["text"])
                 starts = row["entity_starts"]
@@ -158,7 +168,17 @@ class ScanpatchSyntheticControlledAdapter(DatasetAdapter):
                             canonical_label=canonicalize_scanpatch_gold_label(label_str),
                         )
                     )
-                samples.append(EvalSample(sample_id=row_id, text=text, gold_spans=spans))
+                samples.append(
+                    EvalSample(
+                        sample_id=row_id,
+                        text=text,
+                        gold_spans=spans,
+                        metadata={
+                            "source": row.get("source"),
+                            "noisy": row.get("noisy"),
+                        },
+                    )
+                )
             elif "text" in row and "entities" in row:
                 text = str(row["text"])
                 spans: list[EvalSpan] = []
@@ -172,7 +192,17 @@ class ScanpatchSyntheticControlledAdapter(DatasetAdapter):
                             canonical_label=canonicalize_scanpatch_gold_label(label),
                         )
                     )
-                samples.append(EvalSample(sample_id=row_id, text=text, gold_spans=spans))
+                samples.append(
+                    EvalSample(
+                        sample_id=row_id,
+                        text=text,
+                        gold_spans=spans,
+                        metadata={
+                            "source": row.get("source"),
+                            "noisy": row.get("noisy"),
+                        },
+                    )
+                )
             else:
                 raise RuntimeError("Unsupported dataset row format for Scanpatch adapter")
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from dataclasses import field
 
 
 @dataclass(slots=True)
@@ -18,6 +19,7 @@ class EvalSample:
     sample_id: str
     text: str
     gold_spans: list[EvalSpan]
+    metadata: dict[str, str | bool | int | float | None] = field(default_factory=dict)
 
 
 @dataclass(slots=True)

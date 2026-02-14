@@ -73,6 +73,7 @@ def render_markdown_summary(report: dict[str, Any]) -> str:
         f"- Samples: `{report['dataset']['sample_count']}`",
         f"- Policy: `{report['evaluation']['policy_name']}`",
         f"- Runtime: `{report['evaluation']['runtime_mode']}`",
+        f"- Eval Mode: `{report['evaluation'].get('mode', 'baseline')}`",
         f"- Elapsed: `{report['evaluation']['elapsed_seconds']}s`",
         f"- Throughput: `{report['evaluation']['samples_per_second']}` samples/s",
         "",
@@ -102,6 +103,18 @@ def render_markdown_summary(report: dict[str, Any]) -> str:
                 f"R={metric['recall']:.4f}, F1={metric['f1']:.4f}, "
                 f"TP={metric['true_positives']}, FP={metric['false_positives']}, FN={metric['false_negatives']}"
             )
+        )
+
+    cascade = report.get("evaluation", {}).get("cascade")
+    if isinstance(cascade, dict):
+        lines.append("")
+        lines.append("## Cascade")
+        lines.append("")
+        lines.append(
+            f"- Threshold: `{cascade.get('threshold')}`"
+        )
+        lines.append(
+            f"- Escalated: `{cascade.get('escalated_samples')}` / `{report['dataset']['sample_count']}`"
         )
 
     return "\n".join(lines) + "\n"

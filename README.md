@@ -81,10 +81,17 @@ Run first dataset evaluation:
 make eval-scanpatch
 ```
 
+Run cascade mode for throughput/quality tradeoff:
+
+```bash
+python -m app.eval.run --dataset scanpatch/pii-ner-corpus-synthetic-controlled --split test --mode cascade --cascade-threshold 0.15
+```
+
 What it does:
 - Downloads dataset automatically with Hugging Face token from `.env.eval`.
 - Reuses local dataset cache at `.eval_cache/` (no re-download on subsequent runs).
 - Writes report files to `reports/evaluations/`.
+- Includes detector-level and dataset-slice metrics in JSON reports.
 
 ## Local run
 
@@ -128,6 +135,8 @@ make download-models MODELS_DIR=./.models
 make dev-up
 make dev-up-gpu
 make test-integration
+make eval-scanpatch
+make eval-scanpatch-baseline
 ```
 
 `make test-integration` uses the local mounted model bundle and offline mode by default, so models are not re-downloaded on each run.

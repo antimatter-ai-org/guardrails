@@ -1,4 +1,4 @@
-.PHONY: dev-up dev-up-gpu dev-down test-unit test-integration test-all download-models check-models eval-scanpatch
+.PHONY: dev-up dev-up-gpu dev-down test-unit test-integration test-all download-models check-models eval-scanpatch eval-scanpatch-baseline eval-scanpatch-cascade
 
 MODELS_DIR ?= ./.models
 POLICY_PATH ?= ./configs/policy.yaml
@@ -30,4 +30,10 @@ test-integration: check-models
 test-all: test-unit test-integration
 
 eval-scanpatch:
-	. .venv/bin/activate && python -m app.eval.run --dataset scanpatch/pii-ner-corpus-synthetic-controlled --split test --policy-path $(POLICY_PATH) --policy-name external_default --env-file $(EVAL_ENV_FILE) --output-dir $(EVAL_OUTPUT_DIR)
+	. .venv/bin/activate && python -m app.eval.run --dataset scanpatch/pii-ner-corpus-synthetic-controlled --split test --policy-path $(POLICY_PATH) --policy-name external_default --mode baseline --env-file $(EVAL_ENV_FILE) --output-dir $(EVAL_OUTPUT_DIR)
+
+eval-scanpatch-baseline:
+	. .venv/bin/activate && python -m app.eval.run --dataset scanpatch/pii-ner-corpus-synthetic-controlled --split test --policy-path $(POLICY_PATH) --policy-name external_default --mode baseline --env-file $(EVAL_ENV_FILE) --output-dir $(EVAL_OUTPUT_DIR)
+
+eval-scanpatch-cascade:
+	. .venv/bin/activate && python -m app.eval.run --dataset scanpatch/pii-ner-corpus-synthetic-controlled --split test --policy-path $(POLICY_PATH) --policy-name external_default --mode cascade --cascade-threshold 0.15 --env-file $(EVAL_ENV_FILE) --output-dir $(EVAL_OUTPUT_DIR)
