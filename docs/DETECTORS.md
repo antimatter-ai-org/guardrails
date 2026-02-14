@@ -119,7 +119,8 @@ Notes:
 Type: `gliner`
 
 Default status:
-- Configured but disabled (`enabled: false`) in `configs/policy.yaml`.
+- Disabled in baseline policy (`configs/policy.yaml`).
+- Enabled in full ML policies (`configs/policy.full.yaml` and GPU profile).
 
 Purpose:
 - Optional multilingual transformer-based entity detector for additional recall.
@@ -133,6 +134,11 @@ Configured candidate labels:
 - `passport number`
 - `credit card number`
 - `api key`
+
+Runtime params (current config):
+- `backend: local_torch`
+- `device: auto`
+- `use_fp16_on_cuda: false`
 
 Concrete emitted labels (with current prefixing rule):
 - `GLINER_person`

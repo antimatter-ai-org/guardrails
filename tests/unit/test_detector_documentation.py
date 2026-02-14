@@ -48,3 +48,15 @@ def test_detector_documentation_covers_configured_detectors_and_labels() -> None
         for item in gliner.get("params", {}).get("labels", []):
             emitted = f"GLINER_{item}"
             assert f"`{emitted}`" in doc_text
+
+
+def test_full_policy_exists_and_keeps_same_detector_definitions() -> None:
+    base_policy = yaml.safe_load(Path("configs/policy.yaml").read_text(encoding="utf-8"))
+    full_policy = yaml.safe_load(Path("configs/policy.full.yaml").read_text(encoding="utf-8"))
+
+    assert base_policy["detector_definitions"].keys() == full_policy["detector_definitions"].keys()
+
+    base_gliner = base_policy["detector_definitions"]["gliner_pii_multilingual"]["enabled"]
+    full_gliner = full_policy["detector_definitions"]["gliner_pii_multilingual"]["enabled"]
+    assert base_gliner is False
+    assert full_gliner is True

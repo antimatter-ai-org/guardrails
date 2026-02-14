@@ -23,7 +23,7 @@ This service is called at explicit stages:
   - Code/secret regex detector
   - Entropy detector
   - Natasha NER (Russian)
-  - Optional GLiNER detector plugin (disabled by default)
+  - Optional GLiNER detector plugin (enabled in full ML profile)
 - Streaming-safe unmasking with chunk boundary handling.
 
 ## API
@@ -98,12 +98,38 @@ pip install -e '.[dev]'
 pytest tests/unit -q
 ```
 
+For full ML detectors on CPU (includes GLiNER + torch):
+
+```bash
+pip install -e '.[dev,ml,ml_torch]'
+```
+
 ## Docker Compose
 
 Start services:
 
 ```bash
 docker compose up -d redis guardrails
+```
+
+Start full ML service on CPU:
+
+```bash
+docker compose --profile ml-cpu up -d redis guardrails-ml-cpu
+```
+
+Start GPU service:
+
+```bash
+docker compose --profile gpu up -d redis guardrails-gpu
+```
+
+Equivalent make targets:
+
+```bash
+make dev-up
+make dev-up-ml-cpu
+make dev-up-gpu
 ```
 
 Run integration tests:
@@ -119,4 +145,6 @@ docker compose --profile test up --build --abort-on-container-exit --exit-code-f
 - `app/storage/redis_store.py`: request/stream state in Redis
 - `app/detectors/*`: detector plugins
 - `configs/policy.yaml`: policy + detector definitions
+- `configs/policy.full.yaml`: full-ML policy profile (GLiNER enabled)
 - `docs/DETECTORS.md`: detector catalog with labels and examples
+- `docs/GPU_SUPPORT.md`: CPU/GPU runtime and deployment options

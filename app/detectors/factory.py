@@ -10,6 +10,7 @@ from app.detectors.gliner_detector import GlinerDetector
 from app.detectors.natasha_detector import NatashaDetector
 from app.detectors.regex_detector import RegexDetector
 from app.detectors.secret_detector import SecretRegexDetector
+from app.settings import settings
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +49,9 @@ def _build_detector(name: str, definition: DetectorDefinition) -> Detector:
             model_name=str(params.get("model_name", "urchade/gliner_multi-v2.1")),
             labels=[str(item) for item in params.get("labels", [])],
             threshold=float(params.get("threshold", 0.5)),
+            backend=str(params.get("backend", settings.gliner_backend)),
+            device=str(params.get("device", settings.gliner_device)),
+            use_fp16_on_cuda=bool(params.get("use_fp16_on_cuda", settings.gliner_use_fp16_on_cuda)),
         )
 
     raise ValueError(f"Unsupported detector type: {detector_type}")

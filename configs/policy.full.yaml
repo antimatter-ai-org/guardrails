@@ -115,7 +115,7 @@ detector_definitions:
 
   gliner_pii_multilingual:
     type: gliner
-    enabled: false
+    enabled: true
     params:
       model_name: "urchade/gliner_multi-v2.1"
       threshold: 0.62

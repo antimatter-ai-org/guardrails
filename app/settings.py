@@ -14,5 +14,9 @@ class Settings(BaseSettings):
     policy_path: str = "configs/policy.yaml"
     redis_url: str = "redis://redis:6379/0"
 
+    gliner_backend: str = "local_torch"
+    gliner_device: str = "auto"
+    gliner_use_fp16_on_cuda: bool = False
+
 
 settings = Settings()

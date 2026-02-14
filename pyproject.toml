@@ -24,6 +24,8 @@ dependencies = [
 [project.optional-dependencies]
 ml = [
   "gliner>=0.2.11",
+]
+ml_torch = [
   "torch>=2.3.0",
 ]
 dev = [

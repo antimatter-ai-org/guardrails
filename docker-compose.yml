@@ -26,6 +26,52 @@ services:
       timeout: 3s
       retries: 20
 
+  guardrails-ml-cpu:
+    build:
+      context: .
+      dockerfile: Dockerfile.ml
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8080"]
+    environment:
+      GR_POLICY_PATH: /app/configs/policy.full.yaml
+      GR_REDIS_URL: redis://redis:6379/0
+      GR_GLINER_DEVICE: cpu
+      GR_GLINER_BACKEND: local_torch
+    ports:
+      - "8081:8080"
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/health').read()"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    profiles: ["ml-cpu"]
+
+  guardrails-gpu:
+    build:
+      context: .
+      dockerfile: Dockerfile.gpu
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8080"]
+    environment:
+      GR_POLICY_PATH: /app/configs/policy.full.yaml
+      GR_REDIS_URL: redis://redis:6379/0
+      GR_GLINER_DEVICE: cuda
+      GR_GLINER_BACKEND: local_torch
+      GR_GLINER_USE_FP16_ON_CUDA: "true"
+    ports:
+      - "8082:8080"
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/health').read()"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    gpus: all
+    profiles: ["gpu"]
+
   integration-tests:
     build: .
     command: ["pytest", "tests/integration", "-q"]
