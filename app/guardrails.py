@@ -63,9 +63,10 @@ class GuardrailsService:
 
         all_placeholders: dict[str, str] = {}
         findings_count = 0
+        request_hint = "".join(ch for ch in request_id if ch.isalnum())[:8].upper() or "REQ"
 
         for slot_idx, slot in enumerate(slots):
-            slot_prefix = f"{policy.placeholder_prefix}{slot_idx:02d}"
+            slot_prefix = f"{policy.placeholder_prefix}{slot_idx:02d}{request_hint}"
             masker = SensitiveDataMasker(
                 detectors=detectors,
                 min_score=policy.min_score,
@@ -101,6 +102,7 @@ class GuardrailsService:
 
         placeholders: dict[str, str] = context.get("placeholders", {})
         if not placeholders:
+            await self._mapping_store.delete(request_id)
             return payload
 
         unmasked_payload = copy_payload(payload)

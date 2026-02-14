@@ -103,7 +103,10 @@ async def unmask_endpoint(request: GuardResponse) -> dict[str, Any]:
 
 @app.post("/v1/chat/completions")
 async def chat_completions_proxy(request: Request) -> Response:
-    raw_payload = await request.json()
+    try:
+        raw_payload = await request.json()
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail="invalid JSON payload") from exc
     validated = ChatCompletionRequest.model_validate(raw_payload)
     if validated.stream:
         raise HTTPException(status_code=400, detail="stream=true is not supported in MVP")
@@ -133,6 +136,7 @@ async def chat_completions_proxy(request: Request) -> Response:
     )
 
     if status_code >= 400:
+        await app.state.mapping_store.delete(request_id)
         return JSONResponse(status_code=status_code, content=upstream_payload)
 
     unmasked_payload = await app.state.guardrails.unmask_response(request_id=request_id, payload=upstream_payload)
