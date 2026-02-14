@@ -13,8 +13,6 @@ class Settings(BaseSettings):
 
     policy_path: str = "configs/policy.yaml"
     redis_url: str = "redis://redis:6379/0"
-    default_upstream_base_url: str = "http://mock-llm:8090"
-    http_timeout_seconds: float = 60.0
 
 
 settings = Settings()

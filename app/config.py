@@ -25,20 +25,11 @@ class PolicyDefinition(BaseModel):
     placeholder_prefix: str = "GR"
 
 
-class RoutingConfig(BaseModel):
-    model_config = ConfigDict(extra="allow")
-
-    external_model_patterns: list[str] = Field(default_factory=list)
-    onprem_model_patterns: list[str] = Field(default_factory=list)
-    default_destination: Literal["external", "onprem"] = "external"
-
-
 class PolicyConfig(BaseModel):
     model_config = ConfigDict(extra="allow")
 
     version: int = 1
     default_policy: str
-    routing: RoutingConfig = Field(default_factory=RoutingConfig)
     policies: dict[str, PolicyDefinition]
     detector_definitions: dict[str, DetectorDefinition]
 

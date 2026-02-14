@@ -1,68 +1,95 @@
 # Guardrails Service (MVP)
 
-OpenAI-compatible proxy guardrails for on-prem AI platforms.
+Guardrails microservice for LLM routers.
 
-This service prevents sensitive data leakage to external LLMs by applying **reversible masking** before outbound requests and unmasking on inbound responses.
-
-## What is implemented
-
-- OpenAI-compatible `POST /v1/chat/completions` proxy endpoint.
-- Reversible masking pipeline:
-  - Detect sensitive spans.
-  - Replace with deterministic placeholders (e.g. `<GR00:0001>`).
-  - Store placeholder-to-original map in Redis with TTL.
-  - Forward masked payload to upstream LLM.
-  - Unmask placeholders in LLM response before returning to caller.
-- Policy-driven behavior from single YAML file (`configs/policy.yaml`), reloadable via `POST /admin/reload`.
-- Model-based routing policy (`external` vs `onprem`) to avoid unnecessary masking for air-gapped models.
-- Extendable detector plugins.
-
-## Detector stack (RU/EN focused)
-
-MVP combines several detection approaches:
-
-1. Regex detectors (configurable):
-   - Russian PII patterns: phone, passport, SNILS, INN/OGRN, bank card, email.
-   - English/common patterns: SSN, IBAN, SWIFT, international phone.
-2. Secret detection for code/agent workloads:
-   - Signature regexes: AWS keys, GitHub tokens, Slack tokens, JWT, private keys, generic key/value secrets.
-3. Entropy detector:
-   - Catches high-entropy tokens that often represent unknown secret formats.
-4. Russian NER (`natasha`) detector:
-   - Detects entities in Russian text with NER.
-5. Optional multilingual BERT-like detector (`GLiNER`) plugin:
-   - Disabled in default config but implemented and pluggable.
-
-## Why these libraries
-
-- `natasha` (Russian NLP/NER): https://github.com/natasha/natasha
-- `GLiNER` (general multilingual transformer-based entity detection): https://github.com/urchade/GLiNER
-- We considered Presidio as an orchestration option and kept architecture compatible with that style:
-  - https://microsoft.github.io/presidio/
-
-The selected stack gives strong rule-based control for security teams plus ML-assisted recall for Russian and English text.
+This service does **detection, masking, and unmasking only**. It does not route or proxy model traffic.
 
 ## Architecture
 
-- `app/main.py`: API endpoints and proxy flow.
-- `app/guardrails.py`: masking/unmasking orchestration + policy application.
-- `app/masking/engine.py`: span conflict resolution, reversible placeholders.
-- `app/masking/payload.py`: OpenAI payload traversal (request/response text slots).
-- `app/detectors/*`: detector plugins.
-- `app/policy.py` + `app/config.py`: YAML config loading and model-policy resolution.
-- `app/storage/redis_store.py`: Redis TTL map store for reversible masking.
+Your LLM router owns request forwarding.
+This service is called at explicit stages:
+
+1. Router calls `mask` on outbound user content.
+2. Router sends masked content to external LLM.
+3. Router calls `unmask` for non-streamed responses, or `unmask-stream` per chunk for streamed responses.
+4. Router calls `finalize` to cleanup request state.
+
+## Features
+
+- Reversible masking with Redis-backed request context.
+- Policy-driven behavior from YAML (`configs/policy.yaml`).
+- RU/EN-focused detector stack:
+  - Regex PII detectors (Russian + English patterns)
+  - Code/secret regex detector
+  - Entropy detector
+  - Natasha NER (Russian)
+  - Optional GLiNER detector plugin (disabled by default)
+- Streaming-safe unmasking with chunk boundary handling.
 
 ## API
 
-- `GET /health`
-- `POST /admin/reload`
-- `POST /v1/chat/completions` (proxy + guardrails)
-- `POST /v1/guardrails/mask` (explicit pre-processing)
-- `POST /v1/guardrails/unmask` (explicit post-processing)
+### `GET /v1/guardrails/policies`
+Returns available policy names and default policy.
+
+### `POST /v1/guardrails/detect`
+Detection only (no masking, no context storage).
+
+Request:
+
+```json
+{
+  "policy_name": "external_default",
+  "items": [{"id": "msg-1", "text": "Мой email ivan@example.com"}]
+}
+```
+
+### `POST /v1/guardrails/mask`
+Masks sensitive content and optionally stores context for later unmasking.
+
+Request:
+
+```json
+{
+  "request_id": "req-123",
+  "policy_name": "external_default",
+  "store_context": true,
+  "items": [{"id": "msg-1", "text": "Мой email ivan@example.com"}]
+}
+```
+
+### `POST /v1/guardrails/unmask`
+Unmasks batch text items using stored context.
+
+### `POST /v1/guardrails/unmask-stream`
+Unmasks one streamed chunk at a time.
+
+Important fields:
+- `stream_id`: logical stream key (for multi-choice/multi-stream outputs).
+- `final`: set `true` on last chunk.
+- `delete_context`: set `true` on final chunk when request is complete.
+
+### `POST /v1/guardrails/finalize`
+Force cleanup of request context and stream buffers.
+Use for cancellation/error paths in router.
+
+## Streaming behavior
+
+`unmask-stream` handles placeholders split across chunk boundaries.
+It keeps an internal per-stream tail buffer in Redis, so placeholders are only emitted after safe reconstruction.
+
+This avoids leaking raw placeholders when the LLM stream cuts a placeholder token in the middle.
+
+## Policy model
+
+Policies are explicit and selected by router via `policy_name`.
+No model routing logic exists in this service.
+
+Policy modes:
+- `mask`: mask + store placeholders.
+- `passthrough`: leave text unchanged.
+- `block`: return 403 from `mask` if sensitive data detected.
 
 ## Local run
-
-### 1) Python (unit tests)
 
 ```bash
 python3 -m venv .venv
@@ -71,50 +98,24 @@ pip install -e '.[dev]'
 pytest tests/unit -q
 ```
 
-### 2) Full stack via Docker Compose
+## Docker Compose
+
+Start services:
 
 ```bash
-docker compose up -d redis mock-llm guardrails
-curl http://localhost:8080/health
+docker compose up -d redis guardrails
 ```
 
-Run integration tests against full stack:
+Run integration tests:
 
 ```bash
 docker compose --profile test up --build --abort-on-container-exit --exit-code-from integration-tests integration-tests
 ```
 
-Or use `Makefile`:
+## Key files
 
-```bash
-make test-unit
-make test-integration
-```
-
-## Example request
-
-```bash
-curl -X POST http://localhost:8080/v1/chat/completions \
-  -H 'content-type: application/json' \
-  -H 'x-upstream-base-url: http://localhost:8090' \
-  -d '{
-    "model": "gpt-4o-mini",
-    "messages": [{"role":"user","content":"Мой email ivan@example.com и паспорт 1234 567890"}]
-  }'
-```
-
-Guardrails masks sensitive values before upstream call and restores them in final response.
-
-## Extending detectors
-
-1. Add a detector implementation in `app/detectors/`.
-2. Register detector type in `app/detectors/factory.py`.
-3. Add a detector definition in `configs/policy.yaml`.
-4. Reference detector name in target policy.
-5. Reload service (`POST /admin/reload`) or restart.
-
-## MVP limits
-
-- Streaming responses are not yet supported (`stream=true` rejected).
-- Placeholder mapping is per request and stored in Redis with TTL.
-- No advanced anti-correlation cryptography between requests (intentionally out of MVP scope).
+- `app/main.py`: API surface
+- `app/guardrails.py`: masking/unmasking orchestration + stream handling
+- `app/storage/redis_store.py`: request/stream state in Redis
+- `app/detectors/*`: detector plugins
+- `configs/policy.yaml`: policy + detector definitions

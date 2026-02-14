@@ -1,17 +1,6 @@
 version: 1
 default_policy: external_default
 
-routing:
-  external_model_patterns:
-    - "^openrouter/"
-    - "^external/"
-    - "^gpt-"
-    - "^anthropic/"
-  onprem_model_patterns:
-    - "^onprem/"
-    - "^local/"
-  default_destination: external
-
 policies:
   external_default:
     mode: mask
@@ -26,12 +15,22 @@ policies:
       - natasha_ner_ru
       - gliner_pii_multilingual
 
-  onprem_default:
+  onprem_passthrough:
     mode: passthrough
     min_score: 1.0
     storage_ttl_seconds: 300
     placeholder_prefix: "GR"
     detectors: []
+
+  strict_block:
+    mode: block
+    min_score: 0.6
+    storage_ttl_seconds: 3600
+    placeholder_prefix: "GR"
+    detectors:
+      - ru_pii_regex
+      - en_pii_regex
+      - code_secret_regex
 
 detector_definitions:
   ru_pii_regex:

@@ -1,19 +1,38 @@
 from __future__ import annotations
 
 import logging
-import uuid
 from typing import Any
 
-from fastapi import FastAPI, HTTPException, Request, Response
-from fastapi.responses import JSONResponse
+from fastapi import FastAPI, HTTPException
 from redis.asyncio import Redis
 
 from app.config import load_policy_config
 from app.detectors.factory import build_registry
-from app.guardrails import GuardrailsError, GuardrailsService
-from app.models.openai import ChatCompletionRequest, GuardRequest, GuardResponse
+from app.guardrails import (
+    GuardrailsBlockedError,
+    GuardrailsError,
+    GuardrailsNotFoundError,
+    GuardrailsService,
+    TextInput,
+)
+from app.models.api import (
+    DetectRequest,
+    DetectResponse,
+    DetectResultItem,
+    DetectionItem,
+    FinalizeRequest,
+    FinalizeResponse,
+    MaskRequest,
+    MaskResponse,
+    MaskResultItem,
+    PolicyListResponse,
+    StreamUnmaskRequest,
+    StreamUnmaskResponse,
+    UnmaskRequest,
+    UnmaskResponse,
+    UnmaskResultItem,
+)
 from app.policy import PolicyResolver
-from app.proxy.upstream import UpstreamClient
 from app.settings import settings
 from app.storage.redis_store import RedisMappingStore
 
@@ -23,7 +42,25 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="Guardrails Service", version="0.1.0")
+app = FastAPI(title="Guardrails Service", version="0.2.0")
+
+
+def _to_inputs(items) -> list[TextInput]:
+    return [TextInput(id=item.id, text=item.text) for item in items]
+
+
+def _to_detection_items(detections) -> list[DetectionItem]:
+    return [
+        DetectionItem(
+            start=item.start,
+            end=item.end,
+            label=item.label,
+            score=item.score,
+            detector=item.detector,
+            snippet=item.text,
+        )
+        for item in detections
+    ]
 
 
 def _load_runtime() -> None:
@@ -44,14 +81,12 @@ def _load_runtime() -> None:
 async def startup() -> None:
     app.state.redis = Redis.from_url(settings.redis_url, decode_responses=False)
     app.state.mapping_store = RedisMappingStore(app.state.redis)
-    app.state.upstream_client = UpstreamClient(timeout_seconds=settings.http_timeout_seconds)
     _load_runtime()
 
 
 @app.on_event("shutdown")
 async def shutdown() -> None:
-    await app.state.upstream_client.close()
-    await app.state.redis.close()
+    await app.state.redis.aclose()
 
 
 @app.get("/health")
@@ -66,85 +101,125 @@ async def reload_policy() -> dict[str, Any]:
         "status": "reloaded",
         "policy_path": settings.policy_path,
         "detectors": app.state.detector_registry.names(),
+        "policies": app.state.policy_resolver.list_policies(),
     }
 
 
-@app.post("/v1/guardrails/mask")
-async def mask_endpoint(request: GuardRequest) -> dict[str, Any]:
-    payload = request.payload
-    model_name = str(payload.get("model", ""))
-    if not model_name:
-        raise HTTPException(status_code=400, detail="payload.model is required")
-
-    masked_payload, policy_name, context = await app.state.guardrails.mask_request(
-        request_id=request.request_id,
-        payload=payload,
-        model_name=model_name,
+@app.get("/v1/guardrails/policies", response_model=PolicyListResponse)
+async def list_policies() -> PolicyListResponse:
+    return PolicyListResponse(
+        default_policy=app.state.policy_resolver.config.default_policy,
+        policies=app.state.policy_resolver.list_policies(),
     )
-    return {
-        "request_id": request.request_id,
-        "policy": policy_name,
-        "payload": masked_payload,
-        "masked_values": len(context.get("placeholders", {})),
-    }
 
 
-@app.post("/v1/guardrails/unmask")
-async def unmask_endpoint(request: GuardResponse) -> dict[str, Any]:
-    payload = await app.state.guardrails.unmask_response(
-        request_id=request.request_id,
-        payload=request.payload,
-    )
-    return {
-        "request_id": request.request_id,
-        "payload": payload,
-    }
-
-
-@app.post("/v1/chat/completions")
-async def chat_completions_proxy(request: Request) -> Response:
+@app.post("/v1/guardrails/detect", response_model=DetectResponse)
+async def detect_endpoint(request: DetectRequest) -> DetectResponse:
     try:
-        raw_payload = await request.json()
-    except Exception as exc:
-        raise HTTPException(status_code=400, detail="invalid JSON payload") from exc
-    validated = ChatCompletionRequest.model_validate(raw_payload)
-    if validated.stream:
-        raise HTTPException(status_code=400, detail="stream=true is not supported in MVP")
-
-    request_id = request.headers.get("x-request-id") or str(uuid.uuid4())
-    policy_name_override = request.headers.get("x-guardrails-policy")
-    upstream_base_url = request.headers.get("x-upstream-base-url", settings.default_upstream_base_url)
-
-    try:
-        masked_payload, policy_name, context = await app.state.guardrails.mask_request(
-            request_id=request_id,
-            payload=raw_payload,
-            model_name=validated.model,
-            policy_name=policy_name_override,
+        result = await app.state.guardrails.detect_items(
+            items=_to_inputs(request.items),
+            policy_name=request.policy_name,
         )
+    except KeyError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    return DetectResponse(
+        policy_name=result.policy_name,
+        mode=result.mode,
+        findings_count=result.findings_count,
+        items=[
+            DetectResultItem(id=item.id, detections=_to_detection_items(item.detections))
+            for item in result.items
+        ],
+    )
+
+
+@app.post("/v1/guardrails/mask", response_model=MaskResponse)
+async def mask_endpoint(request: MaskRequest) -> MaskResponse:
+    try:
+        result = await app.state.guardrails.mask_items(
+            request_id=request.request_id,
+            items=_to_inputs(request.items),
+            policy_name=request.policy_name,
+            store_context=request.store_context,
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except GuardrailsBlockedError as exc:
+        raise HTTPException(
+            status_code=403,
+            detail={"message": str(exc), "findings_count": exc.findings_count},
+        ) from exc
     except GuardrailsError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    forward_headers: dict[str, str] = {}
-    if "authorization" in request.headers:
-        forward_headers["authorization"] = request.headers["authorization"]
-
-    status_code, upstream_payload, upstream_headers = await app.state.upstream_client.chat_completions(
-        base_url=upstream_base_url,
-        payload=masked_payload,
-        headers=forward_headers,
+    return MaskResponse(
+        request_id=result.request_id,
+        policy_name=result.policy_name,
+        mode=result.mode,
+        findings_count=result.findings_count,
+        placeholders_count=result.placeholders_count,
+        context_stored=result.context_stored,
+        items=[
+            MaskResultItem(id=item.id, text=item.text, detections=_to_detection_items(item.detections))
+            for item in result.items
+        ],
     )
 
-    if status_code >= 400:
-        await app.state.mapping_store.delete(request_id)
-        return JSONResponse(status_code=status_code, content=upstream_payload)
 
-    unmasked_payload = await app.state.guardrails.unmask_response(request_id=request_id, payload=upstream_payload)
+@app.post("/v1/guardrails/unmask", response_model=UnmaskResponse)
+async def unmask_endpoint(request: UnmaskRequest) -> UnmaskResponse:
+    try:
+        result = await app.state.guardrails.unmask_items(
+            request_id=request.request_id,
+            items=_to_inputs(request.items),
+            delete_context=request.delete_context,
+            allow_missing_context=request.allow_missing_context,
+        )
+    except GuardrailsNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
-    response = JSONResponse(status_code=status_code, content=unmasked_payload)
-    response.headers["x-guardrails-request-id"] = request_id
-    response.headers["x-guardrails-policy"] = policy_name
-    response.headers["x-guardrails-masked-values"] = str(len(context.get("placeholders", {})))
-    if upstream_headers.get("x-request-id"):
-        response.headers["x-upstream-request-id"] = upstream_headers["x-request-id"]
-    return response
+    return UnmaskResponse(
+        request_id=result.request_id,
+        context_found=result.context_found,
+        replacements=result.replacements,
+        context_deleted=result.context_deleted,
+        items=[
+            UnmaskResultItem(id=item.id, text=item.text, replacements=item.replacements)
+            for item in result.items
+        ],
+    )
+
+
+@app.post("/v1/guardrails/unmask-stream", response_model=StreamUnmaskResponse)
+async def unmask_stream_endpoint(request: StreamUnmaskRequest) -> StreamUnmaskResponse:
+    try:
+        result = await app.state.guardrails.unmask_stream_chunk(
+            request_id=request.request_id,
+            stream_id=request.stream_id,
+            chunk=request.chunk,
+            final=request.final,
+            delete_context=request.delete_context,
+            allow_missing_context=request.allow_missing_context,
+        )
+    except GuardrailsNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except GuardrailsError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    return StreamUnmaskResponse(
+        request_id=result.request_id,
+        stream_id=result.stream_id,
+        context_found=result.context_found,
+        output=result.output,
+        replacements=result.replacements,
+        buffered_chars=result.buffered_chars,
+        final=result.final,
+        context_deleted=result.context_deleted,
+    )
+
+
+@app.post("/v1/guardrails/finalize", response_model=FinalizeResponse)
+async def finalize_endpoint(request: FinalizeRequest) -> FinalizeResponse:
+    context_deleted = await app.state.guardrails.finalize_request(request_id=request.request_id)
+    return FinalizeResponse(request_id=request.request_id, context_deleted=context_deleted)

@@ -9,30 +9,16 @@ services:
       timeout: 3s
       retries: 10
 
-  mock-llm:
-    build: .
-    command: ["uvicorn", "tests.fixtures.mock_upstream_app:app", "--host", "0.0.0.0", "--port", "8090"]
-    ports:
-      - "8090:8090"
-    healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8090/health').read()"]
-      interval: 5s
-      timeout: 3s
-      retries: 20
-
   guardrails:
     build: .
     command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8080"]
     environment:
       GR_POLICY_PATH: /app/configs/policy.yaml
       GR_REDIS_URL: redis://redis:6379/0
-      GR_DEFAULT_UPSTREAM_BASE_URL: http://mock-llm:8090
     ports:
       - "8080:8080"
     depends_on:
       redis:
-        condition: service_healthy
-      mock-llm:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/health').read()"]
@@ -45,10 +31,7 @@ services:
     command: ["pytest", "tests/integration", "-q"]
     environment:
       GUARDRAILS_BASE_URL: http://guardrails:8080
-      MOCK_LLM_BASE_URL: http://mock-llm:8090
     depends_on:
       guardrails:
-        condition: service_healthy
-      mock-llm:
         condition: service_healthy
     profiles: ["test"]

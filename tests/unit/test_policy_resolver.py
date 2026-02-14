@@ -1,29 +1,38 @@
 from __future__ import annotations
 
-from app.config import DetectorDefinition, PolicyConfig, PolicyDefinition, RoutingConfig
+import pytest
+
+from app.config import DetectorDefinition, PolicyConfig, PolicyDefinition
 from app.policy import PolicyResolver
 
 
-def test_policy_resolver_uses_route_defaults() -> None:
+def test_policy_resolver_uses_default_or_explicit_policy() -> None:
     config = PolicyConfig(
         default_policy="external_default",
-        routing=RoutingConfig(
-            external_model_patterns=[r"^gpt-"],
-            onprem_model_patterns=[r"^onprem/"],
-            default_destination="external",
-        ),
         policies={
             "external_default": PolicyDefinition(mode="mask", detectors=["a"]),
-            "onprem_default": PolicyDefinition(mode="passthrough", detectors=[]),
+            "strict_block": PolicyDefinition(mode="block", detectors=["a"]),
         },
         detector_definitions={"a": DetectorDefinition(type="regex", enabled=True, params={"patterns": []})},
     )
 
     resolver = PolicyResolver(config)
-    policy_name, policy = resolver.resolve_policy("onprem/mistral")
-    assert policy_name == "onprem_default"
-    assert policy.mode == "passthrough"
+    default_name, default_policy = resolver.resolve_policy()
+    assert default_name == "external_default"
+    assert default_policy.mode == "mask"
 
-    policy_name2, policy2 = resolver.resolve_policy("gpt-4o-mini")
-    assert policy_name2 == "external_default"
-    assert policy2.mode == "mask"
+    strict_name, strict_policy = resolver.resolve_policy("strict_block")
+    assert strict_name == "strict_block"
+    assert strict_policy.mode == "block"
+
+
+def test_policy_resolver_raises_on_unknown_policy() -> None:
+    config = PolicyConfig(
+        default_policy="external_default",
+        policies={"external_default": PolicyDefinition(mode="mask", detectors=[])},
+        detector_definitions={},
+    )
+    resolver = PolicyResolver(config)
+
+    with pytest.raises(KeyError):
+        resolver.resolve_policy("missing")

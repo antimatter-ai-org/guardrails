@@ -4,7 +4,7 @@ test-unit:
 	. .venv/bin/activate && pytest tests/unit -q
 
 dev-up:
-	docker compose up -d redis mock-llm guardrails
+	docker compose up -d redis guardrails
 
 dev-down:
 	docker compose down --remove-orphans
