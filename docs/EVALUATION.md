@@ -1,6 +1,6 @@
 # Evaluation System
 
-This repository includes a manual evaluation framework to benchmark guardrails detectors on public datasets.
+This repository includes a manual evaluation framework to benchmark guardrails recognizers on public datasets.
 
 ## Goals
 
@@ -18,11 +18,11 @@ This repository includes a manual evaluation framework to benchmark guardrails d
 - Cascade shortcut: `make eval-scanpatch-cascade`
 
 Default evaluator mode is `baseline`:
-- All configured detectors run on every sample.
+- All configured recognizers from the selected analyzer profile run on every sample.
 
 Optional `cascade` mode:
-- Stage A runs lightweight detectors.
-- Stage B runs heavy detectors (GLiNER by default) only for uncertain samples.
+- Stage A runs lightweight recognizers.
+- Stage B runs heavy recognizers (GLiNER by default) only for uncertain samples.
 - Use `--mode cascade` to enable staged execution.
 
 ## Adapter Design
@@ -50,7 +50,7 @@ Reports include:
 
 Canonical labels are normalized from:
 - dataset labels (adapter mapping)
-- guardrails detector labels (`app/eval/labels.py`)
+- guardrails prediction labels (`app/eval/labels.py`)
 
 ## Report Format
 
@@ -66,12 +66,12 @@ Top-level JSON fields:
 - `evaluation`
 - `metrics`
 - `errors_preview`
-- `detector_breakdown`
+- `detector_breakdown` (grouped by recognizer/detector name in prediction metadata)
 - `dataset_slices`
 
 `evaluation` additions:
 - `mode`: `baseline` or `cascade`
-- `cascade` (only for cascade mode): threshold, detector stages, escalation count/ratio.
+- `cascade` (only for cascade mode): threshold, stage profiles, heavy recognizers, escalation count/ratio.
 
 ## Caching and Auth
 

@@ -9,18 +9,15 @@ from pathlib import Path
 from typing import Any
 
 from app.config import load_policy_config
+from app.core.analysis.service import PresidioAnalysisService
 from app.eval.datasets.registry import get_dataset_adapter
 from app.eval.env import load_env_file
 from app.eval.labels import canonicalize_prediction_label
 from app.eval.metrics import evaluate_samples, match_counts
-from app.eval.predictor import (
-    detect_only,
-    detect_with_policy,
-    merge_cascade_detections,
-    sample_uncertainty_score,
-)
+from app.eval.predictor import merge_cascade_detections, sample_uncertainty_score
 from app.eval.report import build_report_payload, write_report_files
 from app.eval.types import EvalSpan
+from app.model_assets import apply_model_env
 
 
 def _parse_args() -> argparse.Namespace:
@@ -38,9 +35,9 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--mode", choices=("baseline", "cascade"), default="baseline")
     parser.add_argument("--cascade-threshold", type=float, default=0.15)
     parser.add_argument(
-        "--cascade-heavy-detectors",
+        "--cascade-heavy-recognizers",
         default="gliner_pii_multilingual",
-        help="Comma-separated detector names to run in stage B for cascade mode.",
+        help="Comma-separated recognizer ids to run in stage B for cascade mode.",
     )
     return parser.parse_args()
 
@@ -76,26 +73,6 @@ def _metric_dict(metric: Any) -> dict[str, float | int]:
 
 def _parse_csv(value: str) -> list[str]:
     return [item.strip() for item in value.split(",") if item.strip()]
-
-
-def _detector_stage_split(
-    detectors: list[object],
-    heavy_names: set[str],
-) -> tuple[list[object], list[object]]:
-    stage_a: list[object] = []
-    stage_b: list[object] = []
-    for detector in detectors:
-        detector_name = str(getattr(detector, "name", ""))
-        if detector_name in heavy_names:
-            stage_b.append(detector)
-        else:
-            stage_a.append(detector)
-
-    if not stage_a and stage_b:
-        # Keep at least one stage-A pass for stability.
-        stage_a = list(stage_b)
-        stage_b = []
-    return stage_a, stage_b
 
 
 def _slice_metrics(
@@ -152,40 +129,81 @@ def _detector_breakdown(
     return payload
 
 
-def _warm_up_detectors(detectors: list[object], timeout_seconds: float = 120.0) -> None:
-    for detector in detectors:
-        runtime = getattr(detector, "_runtime", None)
+def _as_eval_spans(detections: list[Any]) -> list[EvalSpan]:
+    spans: list[EvalSpan] = []
+    for item in detections:
+        metadata = item.metadata or {}
+        canonical = metadata.get("canonical_label")
+        if canonical is None:
+            canonical = canonicalize_prediction_label(item.label)
+        spans.append(
+            EvalSpan(
+                start=item.start,
+                end=item.end,
+                label=item.label,
+                canonical_label=canonical,
+                score=item.score,
+                detector=item.detector,
+            )
+        )
+    return spans
+
+
+def _warm_up_profile(service: PresidioAnalysisService, profile_name: str) -> None:
+    profile = service._config.analyzer_profiles[profile_name]  # noqa: SLF001
+    if service._requires_analyzer_engine(profile):  # noqa: SLF001
+        recognizers = service._get_engine(profile_name).registry.recognizers  # noqa: SLF001
+    else:
+        recognizers = service._get_registry(profile_name).recognizers  # noqa: SLF001
+
+    for recognizer in recognizers:
+        runtime = getattr(recognizer, "_runtime", None)
         if runtime is None:
-            detect_fn = getattr(detector, "detect", None)
-            if callable(detect_fn):
-                detect_fn("warmup")
             continue
 
-        # For local runtime we explicitly force a synchronous load to avoid
-        # evaluating with missing GLiNER predictions during async warm-up.
         if getattr(runtime, "_model", None) is None and callable(getattr(runtime, "_load_model", None)):
-            runtime._load_model()
-            if getattr(runtime, "_model", None) is None:
-                load_error = getattr(runtime, "_load_error", None)
-                if load_error:
-                    raise RuntimeError(f"detector warm-up failed: {load_error}")
+            runtime._load_model()  # noqa: SLF001
 
-        detect_fn = getattr(detector, "detect", None)
+        detect_fn = getattr(recognizer, "analyze", None)
         if callable(detect_fn):
-            detect_fn("warmup")
+            try:
+                detect_fn("warmup", [], None)
+            except Exception:
+                pass
 
-        loading_started = bool(getattr(runtime, "_loading_started", False))
-        if not loading_started and getattr(runtime, "_model", None) is not None:
-            continue
 
-        deadline = time.time() + timeout_seconds
-        while time.time() < deadline:
-            if getattr(runtime, "_model", None) is not None:
-                break
-            load_error = getattr(runtime, "_load_error", None)
-            if load_error:
-                raise RuntimeError(f"detector warm-up failed: {load_error}")
-            time.sleep(0.2)
+def _make_cascade_services(
+    policy_config: Any,
+    policy_name: str,
+    heavy_recognizers: set[str],
+) -> tuple[PresidioAnalysisService, str, PresidioAnalysisService | None, str | None]:
+    policy = policy_config.policies[policy_name]
+    profile_name = policy.analyzer_profile
+    profile = policy_config.analyzer_profiles[profile_name]
+    recognizers = list(profile.analysis.recognizers)
+
+    stage_a_recognizers = [name for name in recognizers if name not in heavy_recognizers]
+    stage_b_recognizers = [name for name in recognizers if name in heavy_recognizers]
+
+    if not stage_a_recognizers:
+        stage_a_recognizers = recognizers
+        stage_b_recognizers = []
+
+    config_stage_a = policy_config.model_copy(deep=True)
+    profile_a_name = f"{profile_name}__stage_a"
+    config_stage_a.analyzer_profiles[profile_a_name] = config_stage_a.analyzer_profiles[profile_name].model_copy(deep=True)
+    config_stage_a.analyzer_profiles[profile_a_name].analysis.recognizers = stage_a_recognizers
+    service_a = PresidioAnalysisService(config_stage_a)
+
+    if not stage_b_recognizers:
+        return service_a, profile_a_name, None, None
+
+    config_stage_b = policy_config.model_copy(deep=True)
+    profile_b_name = f"{profile_name}__stage_b"
+    config_stage_b.analyzer_profiles[profile_b_name] = config_stage_b.analyzer_profiles[profile_name].model_copy(deep=True)
+    config_stage_b.analyzer_profiles[profile_b_name].analysis.recognizers = stage_b_recognizers
+    service_b = PresidioAnalysisService(config_stage_b)
+    return service_a, profile_a_name, service_b, profile_b_name
 
 
 def main() -> int:
@@ -197,28 +215,28 @@ def main() -> int:
     if hf_token:
         os.environ.setdefault("HF_TOKEN", hf_token)
 
-    # Load policy and detectors only after env file is applied.
-    from app.detectors.factory import build_registry
     from app.settings import settings
+    apply_model_env(model_dir=settings.model_dir, offline_mode=settings.offline_mode)
 
     policy_config = load_policy_config(args.policy_path)
     policy_name = args.policy_name or policy_config.default_policy
     if policy_name not in policy_config.policies:
         raise KeyError(f"Policy '{policy_name}' not found in {args.policy_path}")
     policy = policy_config.policies[policy_name]
-    heavy_detector_names = set(_parse_csv(args.cascade_heavy_detectors))
 
-    registry = build_registry(policy_config.detector_definitions)
-    detectors: list[object] = []
-    for detector_name in policy.detectors:
-        detector = registry.get(detector_name)
-        if detector is not None:
-            detectors.append(detector)
-
-    if not detectors:
-        raise RuntimeError("No active detectors available for evaluation policy")
-    _warm_up_detectors(detectors)
-    stage_a_detectors, stage_b_detectors = _detector_stage_split(detectors, heavy_detector_names)
+    heavy_recognizers = set(_parse_csv(args.cascade_heavy_recognizers))
+    if args.mode == "cascade":
+        stage_a_service, stage_a_profile, stage_b_service, stage_b_profile = _make_cascade_services(
+            policy_config=policy_config,
+            policy_name=policy_name,
+            heavy_recognizers=heavy_recognizers,
+        )
+        _warm_up_profile(stage_a_service, stage_a_profile)
+        if stage_b_service is not None and stage_b_profile is not None:
+            _warm_up_profile(stage_b_service, stage_b_profile)
+    else:
+        baseline_service = PresidioAnalysisService(policy_config)
+        _warm_up_profile(baseline_service, policy.analyzer_profile)
 
     adapter = get_dataset_adapter(args.dataset)
     samples = adapter.load_samples(
@@ -235,33 +253,39 @@ def main() -> int:
 
     started = time.perf_counter()
     for sample in samples:
-        if args.mode == "baseline":
-            detections = detect_with_policy(sample.text, policy=policy, detectors=detectors)
-        else:
-            stage_a_findings = detect_only(sample.text, policy=policy, detectors=stage_a_detectors)
+        if args.mode == "cascade":
+            _, stage_a_detections = stage_a_service.analyze_text(
+                text=sample.text,
+                profile_name=stage_a_profile,
+                policy_min_score=policy.min_score,
+                language_hint=None,
+            )
             uncertainty = sample_uncertainty_score(
                 sample.text,
-                stage_a_detections=stage_a_findings,
+                stage_a_detections=stage_a_detections,
                 min_score=policy.min_score,
             )
-            if stage_b_detectors and uncertainty >= args.cascade_threshold:
-                cascade_escalated += 1
-                stage_b_findings = detect_only(sample.text, policy=policy, detectors=stage_b_detectors)
-                detections = merge_cascade_detections(stage_a_findings, stage_b_findings)
-            else:
-                detections = stage_a_findings
 
-        predicted_spans = [
-            EvalSpan(
-                start=item.start,
-                end=item.end,
-                label=item.label,
-                canonical_label=canonicalize_prediction_label(item.label),
-                score=item.score,
-                detector=item.detector,
+            if stage_b_service is not None and stage_b_profile is not None and uncertainty >= args.cascade_threshold:
+                cascade_escalated += 1
+                _, stage_b_detections = stage_b_service.analyze_text(
+                    text=sample.text,
+                    profile_name=stage_b_profile,
+                    policy_min_score=policy.min_score,
+                    language_hint=None,
+                )
+                detections = merge_cascade_detections(stage_a_detections, stage_b_detections)
+            else:
+                detections = stage_a_detections
+        else:
+            _, detections = baseline_service.analyze_text(
+                text=sample.text,
+                profile_name=policy.analyzer_profile,
+                policy_min_score=policy.min_score,
+                language_hint=None,
             )
-            for item in detections
-        ]
+
+        predicted_spans = _as_eval_spans(detections)
         predictions_by_id[sample.sample_id] = predicted_spans
         for span in predicted_spans:
             item_detector = span.detector or "unknown"
@@ -308,8 +332,9 @@ def main() -> int:
     if args.mode == "cascade":
         report_payload["evaluation"]["cascade"] = {
             "threshold": args.cascade_threshold,
-            "stage_a_detectors": [str(getattr(detector, "name", "")) for detector in stage_a_detectors],
-            "stage_b_detectors": [str(getattr(detector, "name", "")) for detector in stage_b_detectors],
+            "stage_a_profile": stage_a_profile,
+            "stage_b_profile": stage_b_profile,
+            "heavy_recognizers": sorted(heavy_recognizers),
             "escalated_samples": cascade_escalated,
             "escalated_ratio": round(cascade_escalated / max(1, len(samples)), 6),
         }

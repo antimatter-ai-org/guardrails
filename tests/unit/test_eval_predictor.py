@@ -36,7 +36,7 @@ def test_detect_only_weighted_prefers_regex_ip_over_generic_model() -> None:
 
     findings = detect_only(
         text=text,
-        policy=PolicyDefinition(mode="mask", detectors=[], min_score=0.5),
+        policy=PolicyDefinition(mode="mask", analyzer_profile="x", min_score=0.5),
         detectors=[
             _StaticDetector("network_pii_regex", [regex_detection]),
             _StaticDetector("gliner_pii_multilingual", [gliner_detection]),

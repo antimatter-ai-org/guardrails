@@ -3,9 +3,8 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 
-from app.config import PolicyDefinition
-from app.detectors.factory import DetectorRegistry
-from app.masking.engine import SensitiveDataMasker
+from app.core.analysis.service import PresidioAnalysisService
+from app.core.masking.reversible import ReversibleMaskingEngine
 from app.models.entities import Detection
 from app.policy import PolicyResolver
 from app.storage.redis_store import RedisMappingStore
@@ -31,12 +30,14 @@ class GuardrailsNotFoundError(GuardrailsError):
 class TextInput:
     id: str
     text: str
+    language_hint: str | None = None
 
 
 @dataclass(slots=True)
 class ItemDetectionResult:
     id: str
     detections: list[Detection]
+    language: str
 
 
 @dataclass(slots=True)
@@ -44,6 +45,7 @@ class ItemMaskResult:
     id: str
     text: str
     detections: list[Detection]
+    language: str
 
 
 @dataclass(slots=True)
@@ -97,44 +99,20 @@ class GuardrailsService:
     def __init__(
         self,
         policy_resolver: PolicyResolver,
-        detector_registry: DetectorRegistry,
+        analysis_service: PresidioAnalysisService,
         mapping_store: RedisMappingStore,
     ) -> None:
         self._policy_resolver = policy_resolver
-        self._detector_registry = detector_registry
+        self._analysis_service = analysis_service
         self._mapping_store = mapping_store
-
-    def _resolve_detectors(self, policy: PolicyDefinition):
-        detectors = []
-        for detector_name in policy.detectors:
-            detector = self._detector_registry.get(detector_name)
-            if detector is None:
-                logger.warning("detector '%s' is referenced by policy but unavailable", detector_name)
-                continue
-            detectors.append(detector)
-        return detectors
 
     @staticmethod
     def _request_hint(request_id: str) -> str:
-        return "".join(ch for ch in request_id if ch.isalnum())[:8].upper() or "REQ"
+        return "".join(char for char in request_id if char.isalnum())[:8].upper() or "REQ"
 
     @staticmethod
     def _max_placeholder_len(placeholders: dict[str, str]) -> int:
         return max((len(key) for key in placeholders), default=1)
-
-    def _mask_one(
-        self,
-        text: str,
-        detectors,
-        min_score: float,
-        placeholder_prefix: str,
-    ):
-        masker = SensitiveDataMasker(
-            detectors=detectors,
-            min_score=min_score,
-            placeholder_prefix=placeholder_prefix,
-        )
-        return masker.mask(text)
 
     async def detect_items(
         self,
@@ -142,19 +120,19 @@ class GuardrailsService:
         policy_name: str | None = None,
     ) -> DetectOperationResult:
         resolved_policy_name, policy = self._policy_resolver.resolve_policy(policy_name=policy_name)
-        detectors = self._resolve_detectors(policy)
 
         item_results: list[ItemDetectionResult] = []
         findings_count = 0
-        for idx, item in enumerate(items):
-            result = self._mask_one(
+        for item in items:
+            language, detections = self._analysis_service.analyze_text(
                 text=item.text,
-                detectors=detectors,
-                min_score=policy.min_score,
-                placeholder_prefix=f"DET{idx:03d}",
+                profile_name=policy.analyzer_profile,
+                policy_min_score=policy.min_score,
+                language_hint=item.language_hint,
             )
-            findings_count += len(result.detections)
-            item_results.append(ItemDetectionResult(id=item.id, detections=result.detections))
+            detections = ReversibleMaskingEngine.resolve_overlaps(detections)
+            findings_count += len(detections)
+            item_results.append(ItemDetectionResult(id=item.id, detections=detections, language=language))
 
         return DetectOperationResult(
             policy_name=resolved_policy_name,
@@ -191,29 +169,45 @@ class GuardrailsService:
                 findings_count=0,
                 placeholders_count=0,
                 context_stored=store_context,
-                items=[ItemMaskResult(id=item.id, text=item.text, detections=[]) for item in items],
+                items=[
+                    ItemMaskResult(
+                        id=item.id,
+                        text=item.text,
+                        detections=[],
+                        language=self._analysis_service.resolve_language(
+                            text=item.text,
+                            profile_name=policy.analyzer_profile,
+                            language_hint=item.language_hint,
+                        ),
+                    )
+                    for item in items
+                ],
             )
-
-        detectors = self._resolve_detectors(policy)
-        if not detectors:
-            logger.warning("policy '%s' has no active detectors", resolved_policy_name)
 
         all_placeholders: dict[str, str] = {}
         findings_count = 0
+        output_items: list[ItemMaskResult] = []
         request_hint = self._request_hint(request_id)
 
-        output_items: list[ItemMaskResult] = []
         for idx, item in enumerate(items):
-            prefix = f"{policy.placeholder_prefix}{idx:02d}{request_hint}"
-            masked = self._mask_one(
+            language, detections = self._analysis_service.analyze_text(
                 text=item.text,
-                detectors=detectors,
-                min_score=policy.min_score,
-                placeholder_prefix=prefix,
+                profile_name=policy.analyzer_profile,
+                policy_min_score=policy.min_score,
+                language_hint=item.language_hint,
             )
-            output_items.append(ItemMaskResult(id=item.id, text=masked.text, detections=masked.detections))
+            prefix = f"{policy.placeholder_prefix}{idx:02d}{request_hint}"
+            masker = ReversibleMaskingEngine(prefix)
+            masked = masker.mask(item.text, detections)
             findings_count += len(masked.detections)
-
+            output_items.append(
+                ItemMaskResult(
+                    id=item.id,
+                    text=masked.text,
+                    detections=masked.detections,
+                    language=language,
+                )
+            )
             for placeholder, original in masked.placeholders.items():
                 existing = all_placeholders.get(placeholder)
                 if existing is not None and existing != original:
@@ -267,9 +261,8 @@ class GuardrailsService:
         placeholders: dict[str, str] = context.get("placeholders", {})
         replacements_total = 0
         output_items: list[ItemUnmaskResult] = []
-
         for item in items:
-            result = SensitiveDataMasker.unmask(item.text, placeholders)
+            result = ReversibleMaskingEngine.unmask(item.text, placeholders)
             replacements_total += result.replaced
             output_items.append(ItemUnmaskResult(id=item.id, text=result.text, replacements=result.replaced))
 
@@ -331,11 +324,10 @@ class GuardrailsService:
             )
 
         state = await self._mapping_store.load_stream_state(request_id, stream_id) or {"buffer": ""}
-        previous_buffer = str(state.get("buffer", ""))
-        combined = previous_buffer + chunk
+        combined = str(state.get("buffer", "")) + chunk
 
         if final:
-            unmasked = SensitiveDataMasker.unmask(combined, placeholders)
+            unmasked = ReversibleMaskingEngine.unmask(combined, placeholders)
             await self._mapping_store.delete_stream_state(request_id, stream_id)
             if delete_context:
                 await self._mapping_store.delete_all_for_request(request_id)
@@ -352,7 +344,6 @@ class GuardrailsService:
 
         max_placeholder_len = int(context.get("max_placeholder_len") or self._max_placeholder_len(placeholders))
         holdback = max(0, max_placeholder_len - 1)
-
         if holdback and len(combined) <= holdback:
             await self._mapping_store.save_stream_state(
                 request_id=request_id,
@@ -371,24 +362,15 @@ class GuardrailsService:
                 context_deleted=False,
             )
 
-        if holdback:
-            safe_text = combined[:-holdback]
-            trailing_buffer = combined[-holdback:]
-        else:
-            safe_text = combined
-            trailing_buffer = ""
-
-        unmasked = SensitiveDataMasker.unmask(safe_text, placeholders)
-
-        if trailing_buffer:
-            await self._mapping_store.save_stream_state(
-                request_id=request_id,
-                stream_id=stream_id,
-                payload={"buffer": trailing_buffer},
-                ttl_seconds=ttl_seconds,
-            )
-        else:
-            await self._mapping_store.delete_stream_state(request_id, stream_id)
+        safe_text = combined[:-holdback] if holdback else combined
+        pending_buffer = combined[-holdback:] if holdback else ""
+        unmasked = ReversibleMaskingEngine.unmask(safe_text, placeholders)
+        await self._mapping_store.save_stream_state(
+            request_id=request_id,
+            stream_id=stream_id,
+            payload={"buffer": pending_buffer},
+            ttl_seconds=ttl_seconds,
+        )
 
         return StreamUnmaskOperationResult(
             request_id=request_id,
@@ -396,11 +378,14 @@ class GuardrailsService:
             context_found=True,
             output=unmasked.text,
             replacements=unmasked.replaced,
-            buffered_chars=len(trailing_buffer),
+            buffered_chars=len(pending_buffer),
             final=False,
             context_deleted=False,
         )
 
     async def finalize_request(self, request_id: str) -> bool:
+        context = await self._mapping_store.load_mapping(request_id)
+        if context is None:
+            return False
         await self._mapping_store.delete_all_for_request(request_id)
         return True

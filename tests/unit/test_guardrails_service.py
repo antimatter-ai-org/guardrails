@@ -4,8 +4,8 @@ from typing import Any
 
 import pytest
 
-from app.config import DetectorDefinition, PolicyConfig, PolicyDefinition
-from app.detectors.factory import build_registry
+from app.config import AnalysisConfig, AnalyzerProfile, PolicyConfig, PolicyDefinition, RecognizerDefinition
+from app.core.analysis.service import PresidioAnalysisService
 from app.guardrails import GuardrailsBlockedError, GuardrailsService, TextInput
 from app.policy import PolicyResolver
 
@@ -50,35 +50,43 @@ def _make_service() -> GuardrailsService:
         policies={
             "external_default": PolicyDefinition(
                 mode="mask",
-                detectors=["email_regex"],
+                analyzer_profile="regex_profile",
                 min_score=0.5,
                 storage_ttl_seconds=300,
                 placeholder_prefix="GR",
             ),
             "strict_block": PolicyDefinition(
                 mode="block",
-                detectors=["email_regex"],
+                analyzer_profile="regex_profile",
                 min_score=0.5,
                 storage_ttl_seconds=300,
                 placeholder_prefix="GR",
             ),
             "onprem_passthrough": PolicyDefinition(
                 mode="passthrough",
-                detectors=[],
+                analyzer_profile="empty_profile",
                 min_score=1.0,
                 storage_ttl_seconds=300,
                 placeholder_prefix="GR",
             ),
         },
-        detector_definitions={
-            "email_regex": DetectorDefinition(
+        analyzer_profiles={
+            "regex_profile": AnalyzerProfile(
+                analysis=AnalysisConfig(recognizers=["email_regex"]),
+            ),
+            "empty_profile": AnalyzerProfile(
+                analysis=AnalysisConfig(recognizers=[]),
+            ),
+        },
+        recognizer_definitions={
+            "email_regex": RecognizerDefinition(
                 type="regex",
                 enabled=True,
                 params={
                     "patterns": [
                         {
                             "name": "email",
-                            "label": "EMAIL",
+                            "label": "EMAIL_ADDRESS",
                             "pattern": r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}",
                             "score": 0.98,
                         }
@@ -88,10 +96,10 @@ def _make_service() -> GuardrailsService:
         },
     )
 
-    registry = build_registry(config.detector_definitions)
     resolver = PolicyResolver(config)
     store = InMemoryStore()
-    return GuardrailsService(policy_resolver=resolver, detector_registry=registry, mapping_store=store)  # type: ignore[arg-type]
+    analysis = PresidioAnalysisService(config)
+    return GuardrailsService(policy_resolver=resolver, analysis_service=analysis, mapping_store=store)  # type: ignore[arg-type]
 
 
 @pytest.mark.asyncio

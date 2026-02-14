@@ -15,7 +15,7 @@ Router call sequence:
 ## Features
 
 - Reversible masking with Redis-backed request state.
-- RU/EN detector stack, including GLiNER enabled by default.
+- RU/EN recognizer stack with Presidio backend, including GLiNER enabled by default.
 - Streaming-safe unmasking with chunk boundary buffering.
 - Global runtime switch:
   - `cpu`: in-process model execution (tries MPS on Apple Silicon)
@@ -47,7 +47,7 @@ Router call sequence:
 
 ## Air-gapped models
 
-Download all required models (GLiNER + Natasha) into a single directory:
+Download all required models into a single directory:
 
 ```bash
 make download-models MODELS_DIR=./.models
@@ -84,7 +84,7 @@ make eval-scanpatch
 Run cascade mode for throughput/quality tradeoff:
 
 ```bash
-uv run --extra eval python -m app.eval.run --dataset scanpatch/pii-ner-corpus-synthetic-controlled --split test --mode cascade --cascade-threshold 0.15
+uv run --extra eval python -m app.eval.run --dataset scanpatch/pii-ner-corpus-synthetic-controlled --split test --mode cascade --cascade-threshold 0.15 --cascade-heavy-recognizers gliner_pii_multilingual
 ```
 
 What it does:
@@ -163,15 +163,15 @@ make eval-scanpatch-baseline
 
 - `app/main.py`: API surface
 - `app/guardrails.py`: masking/unmasking orchestration
-- `app/detectors/*`: detector plugins
+- `app/core/analysis/*`: Presidio analysis backend and recognizers
 - `app/runtime/*`: runtime selection and adapters
 - `app/pytriton_server/*`: PyTriton model server and model registry
 - `app/eval/*`: manual dataset evaluation framework
 - `app/finetune/*`: GLiNER data prep, training, and evaluation helpers
 - `app/tools/run_scanpatch_gliner_finetune_pipeline.py`: end-to-end tuning pipeline
 - `app/tools/evaluate_finetuned_gliner.py`: evaluation-only script for existing GLiNER checkpoints
-- `configs/policy.yaml`: policy + detector definitions
-- `docs/DETECTORS.md`: detector catalog and labels
+- `configs/policy.yaml`: policy + analyzer profile + recognizer definitions
+- `docs/DETECTORS.md`: recognizer catalog and labels
 - `docs/GPU_SUPPORT.md`: PyTriton runtime details
 - `docs/EVALUATION.md`: evaluation architecture and report format
 - `docs/FINETUNING.md`: GLiNER fine-tuning workflow

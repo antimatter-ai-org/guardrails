@@ -1,232 +1,154 @@
 # Detector Catalog
 
-This document is the operator-facing reference for detector behavior in this repository.
+This document maps policy recognizers to concrete behavior, output entity labels, and examples.
 
 Maintenance rule:
-- If you add, remove, rename, or relabel a detector in `configs/policy.yaml` or detector code, update this file in the same change.
+- If you change `configs/policy.yaml` recognizer definitions or recognizer code in `app/core/analysis/recognizers.py`, update this file in the same commit.
 
-## Label format
+## Output model
 
-- `regex` and `secret_regex` detectors emit labels exactly as configured in pattern definitions.
-- `phonenumber` detector emits a configured constant label (default `PHONE_LIB`).
-- `ipaddress` detector emits a configured constant label (default `IP_ADDRESS_LIB`).
-- `dateparser` detector emits a configured constant label (default `DATE_TEXT`).
-- `entropy` detector emits the constant label `SECRET_HIGH_ENTROPY`.
-- `natasha` detector emits `NER_{TYPE}` (for example `NER_PER`).
-- `gliner` detector emits `GLINER_{label_from_model}` (for example `GLINER_person`).
+Each finding has:
+- `entity_type`: Presidio-style entity (for example `EMAIL_ADDRESS`, `PHONE_NUMBER`, `DOCUMENT_NUMBER`).
+- `label`: service label used for masking (currently canonical label uppercased, for example `EMAIL`, `PHONE`, `IDENTIFIER`, `SECRET`).
+- `canonical_label`: normalized taxonomy used by policy/reporting (`email`, `phone`, `identifier`, `secret`, etc).
 
-## Detector: `phone_number_lib`
+## Recognizer: `phone_number_lib`
 
-Type: `phonenumber`
+Type: `phone`
 
-Purpose:
-- Detect valid phone numbers using `phonenumbers` parsing/validation (multi-region).
+Source:
+- `phonenumbers` validation and parsing.
 
-Concrete labels used:
-- `PHONE_LIB`
+Primary entity labels:
+- `PHONE_NUMBER`
 
 Examples:
-- Text: `+380661998877` -> label `PHONE_LIB`
-- Text: `(044)987-65-43` -> label `PHONE_LIB`
+- `+7 (999) 123-45-67` -> `PHONE_NUMBER`
+- `+1 (415) 555-0123` -> `PHONE_NUMBER`
 
-## Detector: `ip_address_lib`
+## Recognizer: `ip_address_lib`
 
-Type: `ipaddress`
+Type: `ip`
 
-Purpose:
-- Detect valid IP addresses/CIDR ranges using Python `ipaddress` parsing.
+Source:
+- Python `ipaddress` parsing with IPv4/IPv6/CIDR support.
 
-Concrete labels used:
-- `IP_ADDRESS_LIB`
-
-Examples:
-- Text: `2001:DB8::FFFF:10.10.2.1` -> label `IP_ADDRESS_LIB`
-- Text: `10.12.0.0/16` -> label `IP_ADDRESS_LIB`
-
-## Detector: `date_text_parser`
-
-Type: `dateparser`
-
-Purpose:
-- Detect textual date expressions in RU/UK/EN using `dateparser`.
-
-Concrete labels used:
-- `DATE_TEXT`
-
-Examples:
-- Text: `22 мая 1999 года` -> label `DATE_TEXT`
-- Text: `21 листопада 2023` -> label `DATE_TEXT`
-
-## Detector: `ru_pii_regex`
-
-Type: `regex`
-
-Purpose:
-- Detect Russian-centric PII and common identifiers.
-
-Concrete labels used:
-- `RU_PHONE`
-- `RU_PASSPORT`
-- `RU_SNILS`
-- `RU_INN`
-- `RU_OGRN`
-- `PAYMENT_CARD`
-- `EMAIL`
-
-Examples:
-- Text: `Свяжитесь со мной: +7 (999) 123-45-67` -> label `RU_PHONE`
-- Text: `Паспорт: 1234 567890` -> label `RU_PASSPORT`
-- Text: `SNILS 123-456-789 01` -> label `RU_SNILS`
-- Text: `ИНН 7707083893` -> label `RU_INN`
-- Text: `ОГРН 1027700132195` -> label `RU_OGRN`
-- Text: `Карта 4111 1111 1111 1111` -> label `PAYMENT_CARD`
-- Text: `ivan.petrov@example.com` -> label `EMAIL`
-
-## Detector: `en_pii_regex`
-
-Type: `regex`
-
-Purpose:
-- Detect English/international PII and payment/account identifiers.
-
-Concrete labels used:
-- `US_SSN`
-- `IBAN`
-- `SWIFT`
-- `PHONE`
-
-Examples:
-- Text: `SSN: 123-45-6789` -> label `US_SSN`
-- Text: `IBAN DE89370400440532013000` -> label `IBAN`
-- Text: `BIC DEUTDEFF` -> label `SWIFT`
-- Text: `Call me at +1 (415) 555-0123` -> label `PHONE`
-
-## Detector: `identifier_regex`
-
-Type: `regex`
-
-Purpose:
-- Detect military IDs, vehicle numbers, VINs, and document identifiers not covered by base RU/EN patterns.
-
-Concrete labels used:
-- `MILITARY_INDIVIDUAL_NUMBER`
-- `VEHICLE_NUMBER`
-- `VEHICLE_VIN`
-- `DOCUMENT_NUMBER`
-
-Examples:
-- Text: `в/ч-5211` -> label `MILITARY_INDIVIDUAL_NUMBER`
-- Text: `59-БП-663` -> label `MILITARY_INDIVIDUAL_NUMBER`
-- Text: `КА9914МВ` -> label `VEHICLE_NUMBER`
-- Text: `TMBJG7NE5J0146321` -> label `VEHICLE_VIN`
-- Text: `UPZ-11903` -> label `DOCUMENT_NUMBER`
-
-## Detector: `network_pii_regex`
-
-Type: `regex`
-
-Purpose:
-- Detect IPv4/IPv6 addresses and CIDR ranges.
-
-Concrete labels used:
+Primary entity labels:
 - `IP_ADDRESS`
 
 Examples:
-- Text: `193.51.208.14` -> label `IP_ADDRESS`
-- Text: `100.64.0.0/10` -> label `IP_ADDRESS`
-- Text: `2a00:1450::401:9c` -> label `IP_ADDRESS`
+- `2001:DB8::FFFF:10.10.2.1` -> `IP_ADDRESS`
+- `10.12.0.0/16` -> `IP_ADDRESS`
 
-## Detector: `date_pii_regex`
+## Recognizer: `ru_pii_regex`
 
 Type: `regex`
 
-Purpose:
-- Detect structured date formats in Russian and English text.
-
-Concrete labels used:
-- `DATE`
+Pattern labels:
+- `PHONE_NUMBER`
+- `DOCUMENT_NUMBER`
+- `TIN`
+- `CREDIT_CARD`
+- `EMAIL_ADDRESS`
 
 Examples:
-- Text: `12.03.2022` -> label `DATE`
-- Text: `2024.Q3` -> label `DATE`
-- Text: `11/2024` -> label `DATE`
-- Text: `2021–2022 годах` -> label `DATE`
+- `Паспорт: 1234 567890` -> `DOCUMENT_NUMBER`
+- `ИНН 7707083893` -> `TIN`
+- `ivan.petrov@example.com` -> `EMAIL_ADDRESS`
 
-## Detector: `code_secret_regex`
+## Recognizer: `en_pii_regex`
+
+Type: `regex`
+
+Pattern labels:
+- `US_SSN`
+- `IBAN_CODE`
+- `SWIFT_CODE`
+- `PHONE_NUMBER`
+
+Examples:
+- `SSN: 123-45-6789` -> `US_SSN`
+- `IBAN DE89370400440532013000` -> `IBAN_CODE`
+- `BIC DEUTDEFF` -> `SWIFT_CODE`
+
+## Recognizer: `identifier_regex`
+
+Type: `regex`
+
+Pattern labels:
+- `MILITARY_INDIVIDUAL_NUMBER`
+- `VEHICLE_NUMBER`
+- `DOCUMENT_NUMBER`
+
+Examples:
+- `в/ч-5211` -> `MILITARY_INDIVIDUAL_NUMBER`
+- `КА9914МВ` -> `VEHICLE_NUMBER`
+- `UPZ-11903` -> `DOCUMENT_NUMBER`
+
+## Recognizer: `network_pii_regex`
+
+Type: `regex`
+
+Pattern labels:
+- `IP_ADDRESS`
+
+Examples:
+- `193.51.208.14` -> `IP_ADDRESS`
+- `100.64.0.0/10` -> `IP_ADDRESS`
+
+## Recognizer: `date_pii_regex`
+
+Type: `regex`
+
+Pattern labels:
+- `DATE_TIME`
+
+Examples:
+- `12.03.2022` -> `DATE_TIME`
+- `2024.Q3` -> `DATE_TIME`
+
+## Recognizer: `code_secret_regex`
 
 Type: `secret_regex`
 
-Purpose:
-- Detect secrets commonly found in source code, logs, and agent tool output.
+Pattern labels:
+- `API_KEY`
 
-Concrete labels used (built-in):
-- `SECRET_AWS_ACCESS_KEY`
-- `SECRET_GITHUB_TOKEN`
-- `SECRET_SLACK_TOKEN`
-- `SECRET_GENERIC_KEY`
-- `SECRET_PRIVATE_KEY`
-
-Concrete labels used (configured extension):
-- `SECRET_JWT`
+Concrete pattern intents:
+- AWS access key
+- GitHub token
+- Slack token
+- generic key assignment
+- private key PEM header
+- JWT token
 
 Examples:
-- Text: `AWS_ACCESS_KEY_EXAMPLE_0001` -> label `SECRET_AWS_ACCESS_KEY`
-- Text: `github_token_example_value_0002` -> label `SECRET_GITHUB_TOKEN`
-- Text: `slack_token_example_value_0001` -> label `SECRET_SLACK_TOKEN`
-- Text: `api_key = "stripe_example_key_value_0003"` -> label `SECRET_GENERIC_KEY`
-- Text: `-----BEGIN RSA PRIVATE KEY-----` -> label `SECRET_PRIVATE_KEY`
-- Text: `eyJhbGciOi...<snip>...signature` -> label `SECRET_JWT`
+- `AWS_ACCESS_KEY_EXAMPLE_0001` -> `API_KEY`
+- `github_token_example_value_0001` -> `API_KEY`
+- `-----BEGIN RSA PRIVATE KEY-----` -> `API_KEY`
 
-## Detector: `high_entropy_secret`
+## Recognizer: `high_entropy_secret`
 
 Type: `entropy`
 
-Purpose:
-- Catch unknown secret formats via high-entropy token detection.
+Entity labels:
+- `API_KEY`
 
-Concrete labels used:
-- `SECRET_HIGH_ENTROPY`
-
-Examples:
-- Text: `stripe_example_key_value_0001` -> label `SECRET_HIGH_ENTROPY`
-- Text: `3M6f9xQz7Wv2sK1n8Tg5Yp4Rj0LcH2` -> label `SECRET_HIGH_ENTROPY`
-
-## Detector: `natasha_ner_ru`
-
-Type: `natasha`
-
-Purpose:
-- Russian NER for person, organization, and location entities.
-
-Concrete labels used:
-- `NER_PER`
-- `NER_ORG`
-- `NER_LOC`
+Heuristic:
+- regex token candidate + minimum length + Shannon entropy threshold.
 
 Examples:
-- Text: `Иван Петров работает в Сбере` -> labels `NER_PER`, `NER_ORG`
-- Text: `Офис находится в Москве` -> label `NER_LOC`
+- `stripe_example_key_value_0001` -> `API_KEY`
 
-Notes:
-- This detector uses Natasha `NewsNERTagger` (which is backed by Slovnet models internally).
-- In air-gapped mode, Natasha model files are loaded from `GR_MODEL_DIR/natasha/...`.
-
-## Detector: `gliner_pii_multilingual`
+## Recognizer: `gliner_pii_multilingual`
 
 Type: `gliner`
 
-Default status:
-- Enabled in default policy (`configs/policy.yaml`).
+Source:
+- GLiNER model (`urchade/gliner_multi-v2.1`) via local runtime (`cpu`) or PyTriton (`cuda`).
 
-Purpose:
-- Multilingual transformer-based entity detector for additional recall.
-
-Configured candidate labels:
+Configured query labels:
 - `person`
-- `full name`
-- `first name`
-- `last name`
-- `middle name`
 - `organization`
 - `location`
 - `address`
@@ -247,44 +169,18 @@ Configured candidate labels:
 - `credit card number`
 - `api key`
 
-Runtime behavior:
-- CPU mode: in-process GLiNER inference.
-- CUDA mode: inference through PyTriton model server.
-- Long texts: processed with chunking + overlap + span deduplication before final merge.
-
-Optional chunking config (`detector_definitions.<name>.params.chunking`):
-- `enabled` (bool, default `true`)
-- `max_tokens` (int, default `320`)
-- `overlap_tokens` (int, default `64`)
-- `max_chunks` (int, default `64`)
-- `boundary_lookback_tokens` (int, default `24`)
-
-Concrete emitted labels (with current prefixing rule):
-- `GLINER_person`
-- `GLINER_full name`
-- `GLINER_first name`
-- `GLINER_last name`
-- `GLINER_middle name`
-- `GLINER_organization`
-- `GLINER_location`
-- `GLINER_address`
-- `GLINER_street address`
-- `GLINER_city`
-- `GLINER_district`
-- `GLINER_postal code`
-- `GLINER_document number`
-- `GLINER_tax identification number`
-- `GLINER_snils`
-- `GLINER_military number`
-- `GLINER_vehicle number`
-- `GLINER_email`
-- `GLINER_phone number`
-- `GLINER_ip address`
-- `GLINER_date`
-- `GLINER_passport number`
-- `GLINER_credit card number`
-- `GLINER_api key`
+Normalized entity labels produced by recognizer:
+- `PERSON`
+- `ORGANIZATION`
+- `LOCATION`
+- `DOCUMENT_NUMBER`
+- `EMAIL_ADDRESS`
+- `PHONE_NUMBER`
+- `IP_ADDRESS`
+- `DATE_TIME`
+- `CREDIT_CARD`
+- `API_KEY`
 
 Examples:
-- Text: `Contact: ivan@example.com` -> likely `GLINER_email`
-- Text: `Телефон +7 999 123 45 67` -> likely `GLINER_phone number`
+- `Контакт: ivan@example.com` -> `EMAIL_ADDRESS`
+- `Телефон +7 999 123 45 67` -> `PHONE_NUMBER`

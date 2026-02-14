@@ -2,11 +2,21 @@ from __future__ import annotations
 
 from collections import Counter
 from collections.abc import Iterable
+from typing import Protocol
 
-from app.config import PolicyDefinition
-from app.detectors.base import Detector
 from app.eval.labels import canonicalize_prediction_label
 from app.models.entities import Detection
+
+
+class PolicyLike(Protocol):
+    min_score: float
+
+
+class DetectorLike(Protocol):
+    name: str
+
+    def detect(self, text: str) -> list[Detection]:
+        ...
 
 
 def _resolve_overlaps(detections: list[Detection]) -> list[Detection]:
@@ -61,8 +71,8 @@ def _resolve_overlaps_weighted(detections: list[Detection]) -> list[Detection]:
 
 def detect_with_policy(
     text: str,
-    policy: PolicyDefinition,
-    detectors: list[Detector],
+    policy: PolicyLike,
+    detectors: list[DetectorLike],
 ) -> list[Detection]:
     detections: list[Detection] = []
     for detector in detectors:
@@ -74,8 +84,8 @@ def detect_with_policy(
 
 def detect_only(
     text: str,
-    policy: PolicyDefinition,
-    detectors: Iterable[Detector],
+    policy: PolicyLike,
+    detectors: Iterable[DetectorLike],
 ) -> list[Detection]:
     detections: list[Detection] = []
     for detector in detectors:

@@ -1,0 +1,481 @@
+from __future__ import annotations
+
+import ipaddress
+import math
+from collections.abc import Iterable
+from typing import Any
+
+import regex as re
+from presidio_analyzer import EntityRecognizer, Pattern, PatternRecognizer, RecognizerRegistry, RecognizerResult
+
+from app.config import RecognizerDefinition
+from app.runtime.gliner_runtime import build_gliner_runtime
+from app.settings import settings
+
+_FLAG_MAP: dict[str, int] = {
+    "IGNORECASE": re.IGNORECASE,
+    "MULTILINE": re.MULTILINE,
+    "DOTALL": re.DOTALL,
+    "UNICODE": re.UNICODE,
+}
+
+
+def _normalize_entity_type(label: str) -> str:
+    normalized = label.strip().upper().replace("-", "_").replace(" ", "_")
+    if normalized in {"PERSON", "FULL_NAME", "FIRST_NAME", "MIDDLE_NAME", "LAST_NAME", "NAME"}:
+        return "PERSON"
+    if normalized in {"ORGANIZATION", "ORG"}:
+        return "ORGANIZATION"
+    if normalized in {"LOCATION", "ADDRESS", "CITY", "DISTRICT", "POSTAL_CODE", "STREET_ADDRESS"}:
+        return "LOCATION"
+    if normalized in {"EMAIL", "EMAIL_ADDRESS"}:
+        return "EMAIL_ADDRESS"
+    if normalized in {"PHONE", "PHONE_NUMBER"}:
+        return "PHONE_NUMBER"
+    if normalized in {"IP", "IP_ADDRESS"}:
+        return "IP_ADDRESS"
+    if normalized in {"DATE", "DATE_TIME"}:
+        return "DATE_TIME"
+    if normalized in {"PASSPORT_NUMBER", "DOCUMENT_NUMBER", "SNILS", "TAX_IDENTIFICATION_NUMBER", "TIN"}:
+        return "DOCUMENT_NUMBER"
+    if normalized in {"MILITARY_NUMBER", "MILITARY_INDIVIDUAL_NUMBER", "VEHICLE_NUMBER"}:
+        return "DOCUMENT_NUMBER"
+    if normalized in {"CREDIT_CARD_NUMBER", "CREDIT_CARD", "PAYMENT_CARD"}:
+        return "CREDIT_CARD"
+    if normalized in {"API_KEY", "SECRET", "SECRET_KEY"}:
+        return "API_KEY"
+    return normalized
+
+
+class PhoneNumberRecognizer(EntityRecognizer):
+    def __init__(
+        self,
+        *,
+        name: str,
+        supported_language: str,
+        score: float,
+        regions: list[str],
+        min_digits: int,
+    ) -> None:
+        self._score = float(score)
+        self._regions = [item.strip().upper() for item in regions if item.strip()]
+        self._min_digits = max(6, int(min_digits))
+        super().__init__(
+            supported_entities=["PHONE_NUMBER"],
+            name=name,
+            supported_language=supported_language,
+        )
+
+    def load(self) -> None:
+        import phonenumbers
+        from phonenumbers import Leniency, PhoneNumberMatcher, is_valid_number
+
+        self._matcher_cls = PhoneNumberMatcher
+        self._leniency = Leniency
+        self._is_valid_number = is_valid_number
+        self._phonenumbers = phonenumbers
+
+    def analyze(self, text: str, entities: list[str], nlp_artifacts: Any = None) -> list[RecognizerResult]:
+        if entities and "PHONE_NUMBER" not in entities:
+            return []
+
+        hits: list[RecognizerResult] = []
+        seen: set[tuple[int, int]] = set()
+        for region in self._regions:
+            matcher = self._matcher_cls(text, region, leniency=self._leniency.VALID)
+            for match in matcher:
+                start = int(match.start)
+                end = int(match.end)
+                if end <= start or (start, end) in seen:
+                    continue
+                raw = text[start:end]
+                if sum(char.isdigit() for char in raw) < self._min_digits:
+                    continue
+                if not self._is_valid_number(match.number):
+                    continue
+                seen.add((start, end))
+                hits.append(
+                    RecognizerResult(
+                        entity_type="PHONE_NUMBER",
+                        start=start,
+                        end=end,
+                        score=self._score,
+                        recognition_metadata={
+                            RecognizerResult.RECOGNIZER_NAME_KEY: self.name,
+                            RecognizerResult.RECOGNIZER_IDENTIFIER_KEY: self.id,
+                        },
+                    )
+                )
+        return hits
+
+
+class IPAddressRecognizer(EntityRecognizer):
+    def __init__(self, *, name: str, supported_language: str, score: float) -> None:
+        self._score = float(score)
+        super().__init__(
+            supported_entities=["IP_ADDRESS"],
+            name=name,
+            supported_language=supported_language,
+        )
+
+    def load(self) -> None:
+        self._candidate_re = re.compile(r"(?<![A-Za-z0-9_])(?:[0-9A-Fa-f:.]{2,}(?:/[0-9]{1,3})?)(?![A-Za-z0-9_])")
+
+    @staticmethod
+    def _trim_token(raw: str) -> tuple[str, int, int]:
+        trim_chars = "[](){}<>,;\"'`"
+        left = 0
+        right = len(raw)
+        while left < right and raw[left] in trim_chars:
+            left += 1
+        while right > left and raw[right - 1] in trim_chars:
+            right -= 1
+        return raw[left:right], left, len(raw) - right
+
+    @staticmethod
+    def _is_ip(token: str) -> bool:
+        separators = token.count(".") + token.count(":")
+        if separators < 2:
+            return False
+        try:
+            if "/" in token:
+                ipaddress.ip_network(token, strict=False)
+            else:
+                ipaddress.ip_address(token)
+        except Exception:
+            return False
+        return True
+
+    def analyze(self, text: str, entities: list[str], nlp_artifacts: Any = None) -> list[RecognizerResult]:
+        if entities and "IP_ADDRESS" not in entities:
+            return []
+        results: list[RecognizerResult] = []
+        seen: set[tuple[int, int]] = set()
+        for match in self._candidate_re.finditer(text):
+            raw = match.group(0)
+            token, left_trim, right_trim = self._trim_token(raw)
+            if not token or not self._is_ip(token):
+                continue
+            start = match.start() + left_trim
+            end = match.end() - right_trim
+            if end <= start or (start, end) in seen:
+                continue
+            seen.add((start, end))
+            results.append(
+                RecognizerResult(
+                    entity_type="IP_ADDRESS",
+                    start=start,
+                    end=end,
+                    score=self._score,
+                    recognition_metadata={
+                        RecognizerResult.RECOGNIZER_NAME_KEY: self.name,
+                        RecognizerResult.RECOGNIZER_IDENTIFIER_KEY: self.id,
+                    },
+                )
+            )
+        return results
+
+
+class GlinerPresidioRecognizer(EntityRecognizer):
+    def __init__(
+        self,
+        *,
+        name: str,
+        supported_language: str,
+        model_name: str,
+        labels: list[str],
+        threshold: float,
+        chunking: dict[str, Any] | None = None,
+    ) -> None:
+        self._labels = [item for item in labels if item]
+        self._threshold = float(threshold)
+        self._runtime = build_gliner_runtime(
+            runtime_mode=settings.runtime_mode,
+            model_name=model_name,
+            cpu_device=settings.cpu_device,
+            pytriton_url=settings.pytriton_url,
+            pytriton_model_name=settings.pytriton_model_name,
+            pytriton_init_timeout_s=settings.pytriton_init_timeout_s,
+            pytriton_infer_timeout_s=settings.pytriton_infer_timeout_s,
+            chunking_enabled=bool((chunking or {}).get("enabled", True)),
+            chunking_max_tokens=int((chunking or {}).get("max_tokens", 320)),
+            chunking_overlap_tokens=int((chunking or {}).get("overlap_tokens", 64)),
+            chunking_max_chunks=int((chunking or {}).get("max_chunks", 64)),
+            chunking_boundary_lookback_tokens=int((chunking or {}).get("boundary_lookback_tokens", 24)),
+        )
+        entities = sorted({_normalize_entity_type(label) for label in self._labels})
+        super().__init__(
+            supported_entities=entities,
+            name=name,
+            supported_language=supported_language,
+        )
+
+    def load(self) -> None:
+        return None
+
+    def analyze(self, text: str, entities: list[str], nlp_artifacts: Any = None) -> list[RecognizerResult]:
+        raw_predictions = self._runtime.predict_entities(text, self._labels, threshold=self._threshold)
+        results: list[RecognizerResult] = []
+        for item in raw_predictions:
+            label = str(item.get("label", ""))
+            entity_type = _normalize_entity_type(label)
+            if entities and entity_type not in entities:
+                continue
+            start = int(item.get("start", -1))
+            end = int(item.get("end", -1))
+            if end <= start:
+                continue
+            score = float(item.get("score", self._threshold))
+            results.append(
+                RecognizerResult(
+                    entity_type=entity_type,
+                    start=start,
+                    end=end,
+                    score=score,
+                    recognition_metadata={
+                        RecognizerResult.RECOGNIZER_NAME_KEY: self.name,
+                        RecognizerResult.RECOGNIZER_IDENTIFIER_KEY: self.id,
+                    },
+                )
+            )
+        return results
+
+
+class EntropySecretRecognizer(EntityRecognizer):
+    def __init__(
+        self,
+        *,
+        name: str,
+        supported_language: str,
+        min_length: int,
+        entropy_threshold: float,
+        score: float,
+        pattern: str,
+    ) -> None:
+        self._min_length = max(8, int(min_length))
+        self._entropy_threshold = float(entropy_threshold)
+        self._score = float(score)
+        self._pattern_text = pattern
+        super().__init__(
+            supported_entities=["API_KEY"],
+            name=name,
+            supported_language=supported_language,
+        )
+
+    def load(self) -> None:
+        self._candidate_re = re.compile(self._pattern_text)
+
+    @staticmethod
+    def _entropy(token: str) -> float:
+        if not token:
+            return 0.0
+        total = len(token)
+        counts: dict[str, int] = {}
+        for char in token:
+            counts[char] = counts.get(char, 0) + 1
+        entropy = 0.0
+        for count in counts.values():
+            p = count / total
+            entropy -= p * math.log2(p)
+        return entropy
+
+    def analyze(self, text: str, entities: list[str], nlp_artifacts: Any = None) -> list[RecognizerResult]:
+        if entities and "API_KEY" not in entities:
+            return []
+
+        results: list[RecognizerResult] = []
+        seen: set[tuple[int, int]] = set()
+        for match in self._candidate_re.finditer(text):
+            token = match.group(0)
+            if len(token) < self._min_length:
+                continue
+            if self._entropy(token) < self._entropy_threshold:
+                continue
+            start = int(match.start())
+            end = int(match.end())
+            if end <= start or (start, end) in seen:
+                continue
+            seen.add((start, end))
+            results.append(
+                RecognizerResult(
+                    entity_type="API_KEY",
+                    start=start,
+                    end=end,
+                    score=self._score,
+                    recognition_metadata={
+                        RecognizerResult.RECOGNIZER_NAME_KEY: self.name,
+                        RecognizerResult.RECOGNIZER_IDENTIFIER_KEY: self.id,
+                    },
+                )
+            )
+        return results
+
+
+def _pattern_flags(pattern_def: dict[str, Any]) -> int:
+    flags_value = 0
+    for flag in pattern_def.get("flags", []):
+        flags_value |= _FLAG_MAP.get(str(flag).upper(), 0)
+    return flags_value
+
+
+def _iter_languages(params: dict[str, Any], default_supported: Iterable[str]) -> list[str]:
+    raw = params.get("languages")
+    if isinstance(raw, list) and raw:
+        langs = [str(item).strip().lower() for item in raw if str(item).strip()]
+        if langs:
+            return langs
+    return [str(item).strip().lower() for item in default_supported if str(item).strip()]
+
+
+def _build_regex_recognizers(
+    recognizer_id: str,
+    definition: RecognizerDefinition,
+    supported_languages: list[str],
+) -> list[EntityRecognizer]:
+    params = definition.params
+    patterns = params.get("patterns", [])
+    recognizers: list[EntityRecognizer] = []
+    by_label: dict[str, list[Pattern]] = {}
+    flags_by_label: dict[str, int] = {}
+    context_by_label: dict[str, list[str]] = {}
+    for item in patterns:
+        label = _normalize_entity_type(str(item.get("label", "")))
+        if not label:
+            continue
+        pattern_name = str(item.get("name", recognizer_id))
+        pattern_text = str(item.get("pattern", ""))
+        if not pattern_text:
+            continue
+        pattern_score = float(item.get("score", params.get("score", 0.8)))
+        by_label.setdefault(label, []).append(Pattern(name=pattern_name, regex=pattern_text, score=pattern_score))
+        flags_by_label.setdefault(label, _pattern_flags(item))
+        raw_context = item.get("context", params.get("context", []))
+        if isinstance(raw_context, list):
+            context_by_label.setdefault(label, [str(token) for token in raw_context])
+
+    for language in _iter_languages(params, supported_languages):
+        for label, label_patterns in by_label.items():
+            recognizers.append(
+                PatternRecognizer(
+                    supported_entity=label,
+                    name=f"{recognizer_id}:{label}:{language}",
+                    supported_language=language,
+                    patterns=label_patterns,
+                    context=context_by_label.get(label),
+                    global_regex_flags=flags_by_label.get(label, re.IGNORECASE | re.MULTILINE | re.DOTALL),
+                )
+            )
+    return recognizers
+
+
+def _build_phone_recognizers(
+    recognizer_id: str,
+    definition: RecognizerDefinition,
+    supported_languages: list[str],
+) -> list[EntityRecognizer]:
+    params = definition.params
+    regions = [str(item) for item in params.get("regions", ["RU", "UA", "US"])]
+    score = float(params.get("score", 0.92))
+    min_digits = int(params.get("min_digits", 10))
+    return [
+        PhoneNumberRecognizer(
+            name=f"{recognizer_id}:{lang}",
+            supported_language=lang,
+            score=score,
+            regions=regions,
+            min_digits=min_digits,
+        )
+        for lang in _iter_languages(params, supported_languages)
+    ]
+
+
+def _build_ip_recognizers(
+    recognizer_id: str,
+    definition: RecognizerDefinition,
+    supported_languages: list[str],
+) -> list[EntityRecognizer]:
+    score = float(definition.params.get("score", 0.99))
+    return [
+        IPAddressRecognizer(
+            name=f"{recognizer_id}:{lang}",
+            supported_language=lang,
+            score=score,
+        )
+        for lang in _iter_languages(definition.params, supported_languages)
+    ]
+
+
+def _build_gliner_recognizers(
+    recognizer_id: str,
+    definition: RecognizerDefinition,
+    supported_languages: list[str],
+) -> list[EntityRecognizer]:
+    params = definition.params
+    labels = [str(item) for item in params.get("labels", [])]
+    if not labels:
+        return []
+    model_name = str(params.get("model_name", "urchade/gliner_multi-v2.1"))
+    threshold = float(params.get("threshold", 0.62))
+    chunking = params.get("chunking", {})
+    return [
+        GlinerPresidioRecognizer(
+            name=f"{recognizer_id}:{lang}",
+            supported_language=lang,
+            model_name=model_name,
+            labels=labels,
+            threshold=threshold,
+            chunking=chunking if isinstance(chunking, dict) else {},
+        )
+        for lang in _iter_languages(params, supported_languages)
+    ]
+
+
+def _build_recognizers_for_definition(
+    recognizer_id: str,
+    definition: RecognizerDefinition,
+    supported_languages: list[str],
+) -> list[EntityRecognizer]:
+    rec_type = definition.type.lower()
+    if rec_type in {"regex", "secret_regex"}:
+        return _build_regex_recognizers(recognizer_id, definition, supported_languages)
+    if rec_type == "phone":
+        return _build_phone_recognizers(recognizer_id, definition, supported_languages)
+    if rec_type == "ip":
+        return _build_ip_recognizers(recognizer_id, definition, supported_languages)
+    if rec_type == "gliner":
+        return _build_gliner_recognizers(recognizer_id, definition, supported_languages)
+    if rec_type == "entropy":
+        params = definition.params
+        return [
+            EntropySecretRecognizer(
+                name=f"{recognizer_id}:{lang}",
+                supported_language=lang,
+                min_length=int(params.get("min_length", 24)),
+                entropy_threshold=float(params.get("entropy_threshold", 3.7)),
+                score=float(params.get("score", 0.91)),
+                pattern=str(params.get("pattern", r"\b[A-Za-z0-9_\-/+=]{20,}\b")),
+            )
+            for lang in _iter_languages(params, supported_languages)
+        ]
+    return []
+
+
+def build_recognizer_registry(
+    *,
+    use_builtin_recognizers: bool,
+    supported_languages: list[str],
+    recognizer_ids: list[str],
+    recognizer_definitions: dict[str, RecognizerDefinition],
+    nlp_engine: Any | None,
+) -> RecognizerRegistry:
+    registry = RecognizerRegistry()
+    if use_builtin_recognizers:
+        registry.load_predefined_recognizers(languages=supported_languages, nlp_engine=nlp_engine)
+
+    for recognizer_id in recognizer_ids:
+        definition = recognizer_definitions.get(recognizer_id)
+        if definition is None or not definition.enabled:
+            continue
+        for recognizer in _build_recognizers_for_definition(recognizer_id, definition, supported_languages):
+            registry.add_recognizer(recognizer)
+    return registry

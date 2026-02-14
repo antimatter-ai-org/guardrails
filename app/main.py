@@ -7,7 +7,7 @@ from fastapi import FastAPI, HTTPException
 from redis.asyncio import Redis
 
 from app.config import load_policy_config
-from app.detectors.factory import build_registry
+from app.core.analysis.service import PresidioAnalysisService
 from app.guardrails import (
     GuardrailsBlockedError,
     GuardrailsError,
@@ -43,39 +43,52 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="Guardrails Service", version="0.2.0")
+app = FastAPI(title="Guardrails Service", version="0.3.0")
 
 
 def _to_inputs(items) -> list[TextInput]:
-    return [TextInput(id=item.id, text=item.text) for item in items]
+    return [TextInput(id=item.id, text=item.text, language_hint=item.language_hint) for item in items]
 
 
 def _to_detection_items(detections) -> list[DetectionItem]:
-    return [
-        DetectionItem(
-            start=item.start,
-            end=item.end,
-            label=item.label,
-            score=item.score,
-            detector=item.detector,
-            snippet=item.text,
+    output: list[DetectionItem] = []
+    for item in detections:
+        metadata = item.metadata or {}
+        output.append(
+            DetectionItem(
+                start=item.start,
+                end=item.end,
+                label=item.label,
+                score=item.score,
+                detector=item.detector,
+                snippet=item.text,
+                language=str(metadata.get("language") or ""),
+                entity_type=(str(metadata.get("entity_type")) if metadata.get("entity_type") else None),
+                canonical_label=(
+                    str(metadata.get("canonical_label")) if metadata.get("canonical_label") else None
+                ),
+            )
         )
-        for item in detections
-    ]
+    return output
 
 
 def _load_runtime() -> None:
     config = load_policy_config(settings.policy_path)
     resolver = PolicyResolver(config)
-    registry = build_registry(config.detector_definitions)
+    analysis_service = PresidioAnalysisService(config)
     app.state.policy_resolver = resolver
-    app.state.detector_registry = registry
+    app.state.analysis_service = analysis_service
     app.state.guardrails = GuardrailsService(
         policy_resolver=resolver,
-        detector_registry=registry,
+        analysis_service=analysis_service,
         mapping_store=app.state.mapping_store,
     )
-    logger.info("policy loaded from %s, active detectors=%s", settings.policy_path, ",".join(registry.names()))
+    logger.info(
+        "policy loaded from %s, profiles=%s, recognizers=%s",
+        settings.policy_path,
+        ",".join(sorted(config.analyzer_profiles.keys())),
+        ",".join(sorted(config.recognizer_definitions.keys())),
+    )
 
 
 @app.on_event("startup")
@@ -99,11 +112,13 @@ async def health() -> dict[str, str]:
 @app.post("/admin/reload")
 async def reload_policy() -> dict[str, Any]:
     _load_runtime()
+    config = app.state.policy_resolver.config
     return {
         "status": "reloaded",
         "policy_path": settings.policy_path,
-        "detectors": app.state.detector_registry.names(),
         "policies": app.state.policy_resolver.list_policies(),
+        "analyzer_profiles": sorted(config.analyzer_profiles.keys()),
+        "recognizers": sorted(config.recognizer_definitions.keys()),
     }
 
 
@@ -130,7 +145,11 @@ async def detect_endpoint(request: DetectRequest) -> DetectResponse:
         mode=result.mode,
         findings_count=result.findings_count,
         items=[
-            DetectResultItem(id=item.id, detections=_to_detection_items(item.detections))
+            DetectResultItem(
+                id=item.id,
+                language=item.language,
+                detections=_to_detection_items(item.detections),
+            )
             for item in result.items
         ],
     )
@@ -163,7 +182,12 @@ async def mask_endpoint(request: MaskRequest) -> MaskResponse:
         placeholders_count=result.placeholders_count,
         context_stored=result.context_stored,
         items=[
-            MaskResultItem(id=item.id, text=item.text, detections=_to_detection_items(item.detections))
+            MaskResultItem(
+                id=item.id,
+                text=item.text,
+                language=item.language,
+                detections=_to_detection_items(item.detections),
+            )
             for item in result.items
         ],
     )

@@ -8,6 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field
 class TextItem(BaseModel):
     id: str
     text: str
+    language_hint: str | None = None
 
 
 class DetectionItem(BaseModel):
@@ -19,6 +20,9 @@ class DetectionItem(BaseModel):
     score: float
     detector: str
     snippet: str
+    language: str
+    entity_type: str | None = None
+    canonical_label: str | None = None
 
 
 class DetectRequest(BaseModel):
@@ -28,12 +32,14 @@ class DetectRequest(BaseModel):
 
 class DetectResultItem(BaseModel):
     id: str
+    language: str
     detections: list[DetectionItem]
 
 
 class DetectResponse(BaseModel):
     policy_name: str
     mode: Literal["mask", "passthrough", "block"]
+    analysis_backend: Literal["presidio"] = "presidio"
     findings_count: int
     items: list[DetectResultItem]
 
@@ -48,6 +54,7 @@ class MaskRequest(BaseModel):
 class MaskResultItem(BaseModel):
     id: str
     text: str
+    language: str
     detections: list[DetectionItem]
 
 
@@ -55,6 +62,7 @@ class MaskResponse(BaseModel):
     request_id: str
     policy_name: str
     mode: Literal["mask", "passthrough", "block"]
+    analysis_backend: Literal["presidio"] = "presidio"
     findings_count: int
     placeholders_count: int
     context_stored: bool

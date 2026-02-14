@@ -1,3 +1,6 @@
-from app.detectors.factory import DetectorRegistry, build_registry
+"""Legacy detector modules kept for internal utilities/tests.
 
-__all__ = ["DetectorRegistry", "build_registry"]
+Runtime integration is handled by app.core.analysis with Presidio.
+"""
+
+__all__: list[str] = []
