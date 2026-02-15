@@ -36,3 +36,20 @@ def test_resolve_dataset_split_non_strict_falls_back_to_train(monkeypatch) -> No
 
     assert split == "train"
     assert available == ["train"]
+
+
+def test_resolve_dataset_split_allows_synthetic_test_split(monkeypatch) -> None:
+    fake_datasets = types.ModuleType("datasets")
+    fake_datasets.get_dataset_split_names = lambda dataset_name, token=None: ["train"]
+    monkeypatch.setitem(sys.modules, "datasets", fake_datasets)
+
+    split, available = eval_run._resolve_dataset_split(
+        dataset_name="BoburAmirov/rubai-NER-150K-Personal",
+        requested_split="test",
+        hf_token=None,
+        strict_split=True,
+        allow_synthetic_split=True,
+    )
+
+    assert split == "test"
+    assert available == ["train"]

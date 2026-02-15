@@ -5,6 +5,7 @@ import re
 from typing import Any
 
 from app.eval.datasets.base import DatasetAdapter
+from app.eval.datasets.synthetic_split import load_or_create_synthetic_split
 from app.eval.labels import canonicalize_rubai_gold_label
 from app.eval.types import EvalSample, EvalSpan
 
@@ -115,45 +116,34 @@ def _select_token_types(
 
 class RubaiNerPersonalAdapter(DatasetAdapter):
     @property
+    def supports_synthetic_split(self) -> bool:
+        return True
+
+    @property
     def dataset_name(self) -> str:
         return "BoburAmirov/rubai-NER-150K-Personal"
 
-    def load_samples(
-        self,
-        split: str,
-        cache_dir: str,
-        hf_token: str | None,
+    @staticmethod
+    def _row_label_set(row: dict[str, Any]) -> set[str]:
+        canonical_labels: set[str] = set()
+        labels = row.get("labels") or []
+        for item in labels:
+            raw = str(item).strip().upper()
+            if raw in _OUTSIDE_LABELS:
+                continue
+            canonical = canonicalize_rubai_gold_label(raw)
+            if canonical:
+                canonical_labels.add(str(canonical))
+        return canonical_labels
+
+    @staticmethod
+    def _rows_to_samples(
+        rows: Any,
+        split_name: str,
         max_samples: int | None = None,
     ) -> list[EvalSample]:
-        try:
-            from datasets import get_dataset_split_names, load_dataset
-        except Exception as exc:
-            raise RuntimeError("datasets package is required. Install with guardrails-service[eval].") from exc
-
-        available_splits = set(get_dataset_split_names(self.dataset_name, token=hf_token))
-        split_used = split
-        if split_used not in available_splits:
-            if "train" in available_splits:
-                logger.warning(
-                    "dataset %s has no split '%s', using 'train'",
-                    self.dataset_name,
-                    split,
-                )
-                split_used = "train"
-            elif available_splits:
-                split_used = sorted(available_splits)[0]
-            else:
-                raise RuntimeError(f"No splits found for dataset {self.dataset_name}")
-
-        dataset = load_dataset(
-            self.dataset_name,
-            split=split_used,
-            token=hf_token,
-            cache_dir=cache_dir,
-        )
-
         samples: list[EvalSample] = []
-        for idx, row in enumerate(dataset):
+        for idx, row in enumerate(rows):
             sample_id = str(row.get("id", idx))
             text = str(row.get("original", ""))
             row_types = [str(item) for item in (row.get("types") or [])]
@@ -170,11 +160,95 @@ class RubaiNerPersonalAdapter(DatasetAdapter):
                     metadata={
                         "source": row.get("domain"),
                         "noisy": None,
-                        "__split__": split_used,
+                        "__split__": split_name,
                     },
                 )
             )
             if max_samples is not None and len(samples) >= max_samples:
                 break
-
         return samples
+
+    def load_samples(
+        self,
+        split: str,
+        cache_dir: str,
+        hf_token: str | None,
+        synthetic_test_size: float = 0.2,
+        synthetic_split_seed: int = 42,
+        max_samples: int | None = None,
+    ) -> list[EvalSample]:
+        try:
+            from datasets import get_dataset_split_names, load_dataset
+        except Exception as exc:
+            raise RuntimeError("datasets package is required. Install with guardrails-service[eval].") from exc
+
+        available_splits = set(get_dataset_split_names(self.dataset_name, token=hf_token))
+        if split in available_splits:
+            dataset = load_dataset(
+                self.dataset_name,
+                split=split,
+                token=hf_token,
+                cache_dir=cache_dir,
+            )
+            return self._rows_to_samples(dataset, split_name=split, max_samples=max_samples)
+
+        if split in {"train", "test"} and "train" in available_splits:
+            full_train = load_dataset(
+                self.dataset_name,
+                split="train",
+                token=hf_token,
+                cache_dir=cache_dir,
+            )
+            dataset_fingerprint = str(getattr(full_train, "_fingerprint", ""))
+            sample_count = len(full_train)
+            try:
+                split_result = load_or_create_synthetic_split(
+                    dataset_name=self.dataset_name,
+                    cache_dir=cache_dir,
+                    sample_count=sample_count,
+                    test_size=synthetic_test_size,
+                    seed=synthetic_split_seed,
+                    dataset_fingerprint=dataset_fingerprint,
+                )
+            except ValueError:
+                label_sets = [self._row_label_set(row) for row in full_train]
+                split_result = load_or_create_synthetic_split(
+                    dataset_name=self.dataset_name,
+                    cache_dir=cache_dir,
+                    sample_count=sample_count,
+                    sample_labels=label_sets,
+                    test_size=synthetic_test_size,
+                    seed=synthetic_split_seed,
+                    dataset_fingerprint=dataset_fingerprint,
+                )
+            indices = split_result.test_indices if split == "test" else split_result.train_indices
+            if max_samples is not None:
+                indices = indices[:max_samples]
+
+            logger.info(
+                "dataset %s uses synthetic %s split from train (cached=%s, cache=%s)",
+                self.dataset_name,
+                split,
+                split_result.from_cache,
+                split_result.cache_path,
+            )
+            subset = full_train.select(indices)
+            return self._rows_to_samples(subset, split_name=split, max_samples=None)
+
+        if available_splits:
+            fallback_split = sorted(available_splits)[0]
+            logger.warning(
+                "dataset %s has no split '%s', using '%s'",
+                self.dataset_name,
+                split,
+                fallback_split,
+            )
+            dataset = load_dataset(
+                self.dataset_name,
+                split=fallback_split,
+                token=hf_token,
+                cache_dir=cache_dir,
+            )
+            return self._rows_to_samples(dataset, split_name=fallback_split, max_samples=max_samples)
+
+        raise RuntimeError(f"No splits found for dataset {self.dataset_name}")

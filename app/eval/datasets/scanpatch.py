@@ -110,6 +110,8 @@ class ScanpatchSyntheticControlledAdapter(DatasetAdapter):
         split: str,
         cache_dir: str,
         hf_token: str | None,
+        synthetic_test_size: float = 0.2,
+        synthetic_split_seed: int = 42,
         max_samples: int | None = None,
     ) -> list[EvalSample]:
         try:

@@ -20,6 +20,8 @@ This repository includes a manual evaluation framework to benchmark guardrails r
 Dataset selection:
 - `--dataset` omitted: run on all supported datasets.
 - `--dataset <name>`: run on a specific dataset (repeatable option).
+- If requested split is missing and adapter supports it, evaluator can build cached synthetic train/test split.
+- Use `--strict-split` to avoid fallback to unrelated splits; synthetic split still works for supported adapters.
 - Progress is printed during execution (`[progress] ...`) with processed count, throughput, and ETA.
 - Progress cadence is configurable via `--progress-every-samples` and `--progress-every-seconds`.
 
@@ -83,6 +85,7 @@ Top-level JSON fields:
 ## Caching and Auth
 
 - Dataset cache default: `.eval_cache/hf`
+- Synthetic split cache: `.eval_cache/hf/_synthetic_splits/`
 - Env file default: `.env.eval`
 - Token variable: `HF_TOKEN`
 

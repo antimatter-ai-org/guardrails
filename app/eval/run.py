@@ -44,6 +44,18 @@ def _parse_args() -> argparse.Namespace:
         default=False,
         help="Skip datasets missing the requested split instead of falling back to another split.",
     )
+    parser.add_argument(
+        "--synthetic-test-size",
+        type=float,
+        default=0.2,
+        help="Test split ratio for datasets without native test split.",
+    )
+    parser.add_argument(
+        "--synthetic-split-seed",
+        type=int,
+        default=42,
+        help="Random seed for cached synthetic split generation.",
+    )
     parser.add_argument("--max-samples", type=int, default=None)
     parser.add_argument("--errors-preview-limit", type=int, default=25)
     parser.add_argument(
@@ -108,6 +120,7 @@ def _resolve_dataset_split(
     requested_split: str,
     hf_token: str | None,
     strict_split: bool,
+    allow_synthetic_split: bool = False,
 ) -> tuple[str | None, list[str]]:
     try:
         from datasets import get_dataset_split_names
@@ -121,6 +134,8 @@ def _resolve_dataset_split(
 
     available = set(split_names)
     if requested_split in available:
+        return requested_split, sorted(available)
+    if allow_synthetic_split and requested_split in {"train", "test"} and "train" in available:
         return requested_split, sorted(available)
     if strict_split:
         return None, sorted(available)
@@ -313,6 +328,7 @@ def main() -> int:
             requested_split=args.split,
             hf_token=hf_token,
             strict_split=args.strict_split,
+            allow_synthetic_split=adapter.supports_synthetic_split,
         )
         if split_to_use is None:
             available_text = ", ".join(available_splits) if available_splits else "unknown"
@@ -337,6 +353,8 @@ def main() -> int:
             split=split_to_use,
             cache_dir=args.cache_dir,
             hf_token=hf_token,
+            synthetic_test_size=args.synthetic_test_size,
+            synthetic_split_seed=args.synthetic_split_seed,
             max_samples=args.max_samples,
         )
         if not samples:

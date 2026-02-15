@@ -95,6 +95,9 @@ Run a specific dataset only:
 
 ```bash
 uv run --extra eval python -m app.eval.run --dataset scanpatch/pii-ner-corpus-synthetic-controlled --split test
+
+# dataset without native test split: synthetic split is created and cached
+uv run --extra eval python -m app.eval.run --dataset BoburAmirov/rubai-NER-150K-Personal --split test --strict-split
 ```
 
 Run cascade mode for throughput/quality tradeoff:
@@ -106,6 +109,7 @@ uv run --extra eval python -m app.eval.run --dataset scanpatch/pii-ner-corpus-sy
 What it does:
 - Downloads dataset automatically with Hugging Face token from `.env.eval`.
 - Reuses local dataset cache at `.eval_cache/` (no re-download on subsequent runs).
+- For datasets without native `test`, builds and caches a synthetic train/test split with label-balancing heuristic.
 - Writes report files to `reports/evaluations/`.
 - Includes detector-level and dataset-slice metrics in JSON reports.
 
