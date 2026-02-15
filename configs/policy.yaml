@@ -32,6 +32,12 @@ analyzer_profiles:
       backend: presidio
       nlp_engine: none
       use_builtin_recognizers: false
+      postprocess:
+        boundary:
+          enabled: true
+          max_expansion_chars: 180
+          location_enabled: true
+          identifier_enabled: true
       recognizers:
         - phone_number_lib
         - ip_address_lib
@@ -53,6 +59,12 @@ analyzer_profiles:
       backend: presidio
       nlp_engine: none
       use_builtin_recognizers: false
+      postprocess:
+        boundary:
+          enabled: true
+          max_expansion_chars: 140
+          location_enabled: true
+          identifier_enabled: true
       recognizers:
         - phone_number_lib
         - ip_address_lib

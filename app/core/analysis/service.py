@@ -7,9 +7,10 @@ from presidio_analyzer import AnalyzerEngine, EntityRecognizer, RecognizerRegist
 from presidio_analyzer.nlp_engine import NlpEngineProvider
 
 from app.config import AnalyzerProfile, PolicyConfig
-from app.core.analysis.language import resolve_language
+from app.core.analysis.language import resolve_language, resolve_languages
 from app.core.analysis.mapping import canonicalize_entity_type
 from app.core.analysis.recognizers import build_recognizer_registry
+from app.core.analysis.span_normalizer import normalize_detections
 from app.models.entities import Detection
 from app.settings import settings
 
@@ -150,25 +151,46 @@ class PresidioAnalysisService:
         if profile is None:
             raise KeyError(f"analyzer profile not found: {profile_name}")
 
-        language = self.resolve_language(
+        languages = self.resolve_languages(
             text=text,
             profile_name=profile_name,
             language_hint=language_hint,
         )
+        language = languages[0]
 
+        results_with_language: list[tuple[str, RecognizerResult]] = []
         if self._requires_analyzer_engine(profile):
             engine = self._get_engine(profile_name)
-            results = engine.analyze(
-                text=text,
-                language=language,
-                score_threshold=float(policy_min_score),
-                return_decision_process=False,
-            )
+            for current_language in languages:
+                results = engine.analyze(
+                    text=text,
+                    language=current_language,
+                    score_threshold=float(policy_min_score),
+                    return_decision_process=False,
+                )
+                for result in results:
+                    results_with_language.append((current_language, result))
         else:
-            results = self._analyze_with_registry(profile_name, text, language)
+            for current_language in languages:
+                results = self._analyze_with_registry(profile_name, text, current_language)
+                for result in results:
+                    results_with_language.append((current_language, result))
+
+        deduped_results: list[tuple[str, RecognizerResult]] = []
+        dedup_index: dict[tuple[int, int, str], int] = {}
+        for current_language, result in results_with_language:
+            key = (int(result.start), int(result.end), result.entity_type.strip().upper())
+            existing_index = dedup_index.get(key)
+            if existing_index is None:
+                dedup_index[key] = len(deduped_results)
+                deduped_results.append((current_language, result))
+                continue
+            _, previous_result = deduped_results[existing_index]
+            if float(result.score) > float(previous_result.score):
+                deduped_results[existing_index] = (current_language, result)
 
         detections: list[Detection] = []
-        for result in results:
+        for result_language, result in deduped_results:
             threshold = self._result_threshold(result, profile=profile, policy_min_score=policy_min_score)
             if float(result.score) < threshold:
                 continue
@@ -178,7 +200,8 @@ class PresidioAnalysisService:
             metadata = dict(result.recognition_metadata or {})
             metadata["entity_type"] = entity_type
             metadata["canonical_label"] = canonical
-            metadata["language"] = language
+            metadata["language"] = result_language
+            metadata["analysis_languages"] = languages
 
             label = canonical.upper() if canonical else entity_type
             detections.append(
@@ -193,6 +216,11 @@ class PresidioAnalysisService:
                 )
             )
 
+        detections = normalize_detections(
+            text=text,
+            detections=detections,
+            postprocess_config=profile.analysis.postprocess,
+        )
         return language, detections
 
     def resolve_language(
@@ -211,4 +239,24 @@ class PresidioAnalysisService:
             supported=profile.language.supported,
             default_language=profile.language.default,
             detection_mode=profile.language.detection,
+        )
+
+    def resolve_languages(
+        self,
+        *,
+        text: str,
+        profile_name: str,
+        language_hint: str | None,
+    ) -> list[str]:
+        profile = self._config.analyzer_profiles.get(profile_name)
+        if profile is None:
+            raise KeyError(f"analyzer profile not found: {profile_name}")
+        return resolve_languages(
+            text=text,
+            language_hint=language_hint,
+            supported=profile.language.supported,
+            default_language=profile.language.default,
+            detection_mode=profile.language.detection,
+            strategy=profile.language.strategy,
+            union_min_share=profile.language.union_min_share,
         )

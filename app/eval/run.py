@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from app.config import load_policy_config
+from app.core.analysis.language import classify_script_profile
 from app.core.analysis.service import PresidioAnalysisService
 from app.eval.datasets.registry import get_dataset_adapter, list_supported_datasets
 from app.eval.env import load_env_file
@@ -76,6 +77,18 @@ def _parse_args() -> argparse.Namespace:
         "--cascade-heavy-recognizers",
         default="gliner_pii_multilingual",
         help="Comma-separated recognizer ids to run in stage B for cascade mode.",
+    )
+    parser.add_argument(
+        "--warmup-timeout-seconds",
+        type=float,
+        default=120.0,
+        help="Max wait time per runtime-backed recognizer during warm-up.",
+    )
+    parser.add_argument(
+        "--warmup-strict",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Fail the run if any runtime-backed recognizer fails warm-up.",
     )
     return parser.parse_args()
 
@@ -152,6 +165,7 @@ def _slice_metrics(
 ) -> dict[str, Any]:
     by_source: defaultdict[str, list[EvalSample]] = defaultdict(list)
     by_noisy: defaultdict[str, list[EvalSample]] = defaultdict(list)
+    by_script_profile: defaultdict[str, list[EvalSample]] = defaultdict(list)
 
     for sample in samples:
         source = str(sample.metadata.get("source") or "unknown")
@@ -162,6 +176,7 @@ def _slice_metrics(
         else:
             noisy_key = "unknown"
         by_noisy[noisy_key].append(sample)
+        by_script_profile[classify_script_profile(sample.text)].append(sample)
 
     def evaluate_groups(groups: dict[str, list[EvalSample]]) -> dict[str, Any]:
         payload: dict[str, Any] = {}
@@ -177,6 +192,7 @@ def _slice_metrics(
     return {
         "source": evaluate_groups(dict(by_source)),
         "noisy": evaluate_groups(dict(by_noisy)),
+        "script_profile": evaluate_groups(dict(by_script_profile)),
     }
 
 
@@ -220,27 +236,72 @@ def _as_eval_spans(detections: list[Any]) -> list[EvalSpan]:
     return spans
 
 
-def _warm_up_profile(service: PresidioAnalysisService, profile_name: str) -> None:
+def _warm_up_profile(service: PresidioAnalysisService, profile_name: str, timeout_seconds: float) -> list[dict[str, Any]]:
     profile = service._config.analyzer_profiles[profile_name]  # noqa: SLF001
     if service._requires_analyzer_engine(profile):  # noqa: SLF001
         recognizers = service._get_engine(profile_name).registry.recognizers  # noqa: SLF001
     else:
         recognizers = service._get_registry(profile_name).recognizers  # noqa: SLF001
 
+    statuses: list[dict[str, Any]] = []
     for recognizer in recognizers:
+        started = time.perf_counter()
         runtime = getattr(recognizer, "_runtime", None)
-        if runtime is None:
-            continue
+        runtime_type = type(runtime).__name__ if runtime is not None else None
+        ready = True
+        load_error: str | None = None
+        has_runtime = runtime is not None
 
-        if getattr(runtime, "_model", None) is None and callable(getattr(runtime, "_load_model", None)):
-            runtime._load_model()  # noqa: SLF001
-
-        detect_fn = getattr(recognizer, "analyze", None)
-        if callable(detect_fn):
+        if runtime is not None and callable(getattr(runtime, "warm_up", None)):
             try:
-                detect_fn("warmup", [], None)
-            except Exception:
-                pass
+                ready = bool(runtime.warm_up(float(timeout_seconds)))
+            except Exception as exc:  # pragma: no cover - defensive guard
+                ready = False
+                load_error = str(exc)
+            runtime_error = getattr(runtime, "load_error", None)
+            if callable(runtime_error):
+                load_error = runtime_error() or load_error
+            runtime_ready = getattr(runtime, "is_ready", None)
+            if callable(runtime_ready):
+                ready = bool(runtime_ready()) and ready
+        else:
+            detect_fn = getattr(recognizer, "analyze", None)
+            try:
+                if callable(detect_fn):
+                    entities = []
+                    if callable(getattr(recognizer, "get_supported_entities", None)):
+                        entities = recognizer.get_supported_entities()
+                    detect_fn("warmup", entities, None)
+            except Exception as exc:
+                ready = False
+                load_error = str(exc)
+
+        statuses.append(
+            {
+                "recognizer": recognizer.name,
+                "has_runtime": has_runtime,
+                "runtime_type": runtime_type,
+                "ready": bool(ready),
+                "load_error": load_error,
+                "warm_up_seconds": round(time.perf_counter() - started, 6),
+            }
+        )
+    return statuses
+
+
+def _handle_warmup_failures(
+    warmup_statuses: list[dict[str, Any]],
+    *,
+    strict: bool,
+) -> list[dict[str, Any]]:
+    failures = [item for item in warmup_statuses if item["has_runtime"] and not item["ready"]]
+    if failures:
+        failure_names = ", ".join(item["recognizer"] for item in failures)
+        message = f"Warm-up failed for runtime-backed recognizers: {failure_names}"
+        if strict:
+            raise RuntimeError(message)
+        print(f"[warn] {message}", flush=True)
+    return failures
 
 
 def _make_cascade_services(
@@ -305,12 +366,33 @@ def main() -> int:
             policy_name=policy_name,
             heavy_recognizers=heavy_recognizers,
         )
-        _warm_up_profile(stage_a_service, stage_a_profile)
+        warmup_statuses = _warm_up_profile(
+            stage_a_service,
+            stage_a_profile,
+            timeout_seconds=args.warmup_timeout_seconds,
+        )
+        for status in warmup_statuses:
+            status["stage"] = "stage_a"
         if stage_b_service is not None and stage_b_profile is not None:
-            _warm_up_profile(stage_b_service, stage_b_profile)
+            stage_b_statuses = _warm_up_profile(
+                stage_b_service,
+                stage_b_profile,
+                timeout_seconds=args.warmup_timeout_seconds,
+            )
+            for status in stage_b_statuses:
+                status["stage"] = "stage_b"
+            warmup_statuses.extend(stage_b_statuses)
     else:
         baseline_service = PresidioAnalysisService(policy_config)
-        _warm_up_profile(baseline_service, policy.analyzer_profile)
+        warmup_statuses = _warm_up_profile(
+            baseline_service,
+            policy.analyzer_profile,
+            timeout_seconds=args.warmup_timeout_seconds,
+        )
+        for status in warmup_statuses:
+            status["stage"] = "baseline"
+
+    warmup_failures = _handle_warmup_failures(warmup_statuses, strict=args.warmup_strict)
 
     overall_started = time.perf_counter()
 
@@ -547,6 +629,12 @@ def main() -> int:
         errors_preview=combined_errors_preview,
     )
     report_payload["evaluation"]["mode"] = args.mode
+    report_payload["evaluation"]["warmup"] = {
+        "timeout_seconds": float(args.warmup_timeout_seconds),
+        "strict": bool(args.warmup_strict),
+        "failures": len(warmup_failures),
+        "recognizers": warmup_statuses,
+    }
     report_payload["datasets"] = dataset_reports
     report_payload["detector_breakdown"] = _detector_breakdown(all_samples, dict(all_detector_predictions))
     report_payload["dataset_slices"] = _slice_metrics(all_samples, all_predictions_by_id)

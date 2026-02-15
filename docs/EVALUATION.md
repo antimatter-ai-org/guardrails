@@ -16,6 +16,8 @@ This repository includes a manual evaluation framework to benchmark guardrails r
 - Shortcut: `make eval-scanpatch`
 - Baseline shortcut: `make eval-scanpatch-baseline`
 - Cascade shortcut: `make eval-scanpatch-cascade`
+- Baseline manifest: `make eval-manifest EVAL_BASE_REPORT=<report.json>`
+- Report comparison: `make eval-compare EVAL_BASE_REPORT=<base.json> EVAL_CANDIDATE_REPORT=<candidate.json>`
 
 Dataset selection:
 - `--dataset` omitted: run on all supported datasets.
@@ -24,6 +26,9 @@ Dataset selection:
 - Use `--strict-split` to avoid fallback to unrelated splits; synthetic split still works for supported adapters.
 - Progress is printed during execution (`[progress] ...`) with processed count, throughput, and ETA.
 - Progress cadence is configurable via `--progress-every-samples` and `--progress-every-seconds`.
+- Warm-up behavior for runtime-backed recognizers is configurable:
+  - `--warmup-timeout-seconds`
+  - `--warmup-strict / --no-warmup-strict`
 
 Default evaluator mode is `baseline`:
 - All configured recognizers from the selected analyzer profile run on every sample.
@@ -81,6 +86,32 @@ Top-level JSON fields:
 `evaluation` additions:
 - `mode`: `baseline` or `cascade`
 - `cascade` (only for cascade mode): threshold, stage profiles, heavy recognizers, escalation count/ratio.
+- `warmup`: warm-up timeout/strict settings and per-recognizer readiness diagnostics.
+
+## Baseline Manifest and Diff Workflow
+
+To lock a baseline for future experiments:
+
+```bash
+make eval-manifest EVAL_BASE_REPORT=reports/evaluations/eval_all_datasets_test_baseline_YYYYMMDDTHHMMSSZ.json
+```
+
+This writes `reports/evaluations/baseline_manifest.json` with:
+- report paths
+- dataset/split metadata
+- policy/runtime metadata
+- current git commit SHA
+
+To compare a candidate run against the baseline:
+
+```bash
+make eval-compare \
+  EVAL_BASE_REPORT=reports/evaluations/eval_all_datasets_test_baseline_YYYYMMDDTHHMMSSZ.json \
+  EVAL_CANDIDATE_REPORT=reports/evaluations/eval_all_datasets_test_baseline_YYYYMMDDTHHMMSSZ.json \
+  EVAL_COMPARISON_OUTPUT=reports/evaluations/comparison_latest.md
+```
+
+If `EVAL_COMPARISON_OUTPUT` is omitted, markdown is printed to stdout.
 
 ## Caching and Auth
 

@@ -4,6 +4,137 @@ Date: 2026-02-15
 Owner: Guardrails team
 Status: Draft ready for staged implementation
 
+## Execution Log
+
+### 2026-02-15 - Stage 0 Implemented
+
+Status: completed
+
+Implemented:
+
+1. Baseline/candidate comparison CLI:
+   1. `app/tools/compare_eval_reports.py`
+   2. Supports one baseline and multiple candidates.
+   3. Outputs combined, per-dataset, and per-label F1 delta tables.
+2. Baseline manifest CLI:
+   1. `app/tools/create_eval_manifest.py`
+   2. Records report metadata and git SHA.
+3. Make targets:
+   1. `eval-manifest`
+   2. `eval-compare`
+4. Documentation updates:
+   1. `docs/EVALUATION.md` now documents manifest/diff workflow.
+5. Tests:
+   1. `tests/unit/test_eval_report_tools.py`
+
+Results:
+
+1. Tool smoke checks passed:
+   1. `python -m app.tools.compare_eval_reports ...` produced markdown output.
+   2. `python -m app.tools.create_eval_manifest ...` produced manifest output.
+2. Unit tests covering the new tooling passed.
+
+### 2026-02-15 - Stage 1 Implemented
+
+Status: completed
+
+Implemented:
+
+1. Runtime readiness contract in GLiNER runtime layer:
+   1. `GlinerRuntime.warm_up(timeout_s)`
+   2. `GlinerRuntime.is_ready()`
+   3. `GlinerRuntime.load_error()`
+2. Local CPU runtime warm-up:
+   1. Waits for async model load with timeout.
+   2. Exposes ready/error states.
+3. PyTriton runtime warm-up:
+   1. Performs probe inference with timeout bounds.
+   2. Exposes ready/error states.
+4. Evaluation warm-up orchestration:
+   1. `--warmup-timeout-seconds`
+   2. `--warmup-strict / --no-warmup-strict`
+   3. Per-recognizer warm-up status collection.
+   4. Strict failure path for runtime-backed recognizers.
+5. Report output:
+   1. Added `evaluation.warmup` payload.
+   2. Markdown summary includes warm-up diagnostics table.
+6. Tests:
+   1. `tests/unit/test_eval_warmup.py`
+   2. Added warm-up coverage to `tests/unit/test_gliner_runtime.py`
+
+Results:
+
+1. Full unit suite passed:
+   1. `66 passed`
+2. Integration suite status:
+   1. `2 skipped` (no failures)
+
+Non-significant divergence handled:
+
+1. A timing-flaky timeout test was observed in warm-up unit coverage.
+2. Test was updated to deterministic synchronization with `threading.Event`.
+3. Plan unchanged; implementation continued.
+
+### 2026-02-15 - Stage 2 Implemented
+
+Status: completed
+
+Implemented:
+
+1. Language resolver upgrade:
+   1. Added script profiling helpers (`mostly_cyrillic`, `mostly_latin`, `mixed`, `no_letters`).
+   2. Added `resolve_languages(...)` with `single|union` strategy.
+2. Config model additions:
+   1. `language.strategy`
+   2. `language.union_min_share`
+3. Analysis service update:
+   1. Added `resolve_languages(...)` method.
+   2. Multi-language analysis path with dedup of identical spans.
+4. Evaluation slicing:
+   1. Added `dataset_slices.script_profile`.
+5. Tests:
+   1. `tests/unit/test_analysis_language.py`
+
+Results:
+
+1. Unit suite passed (`75 passed`).
+2. Stage 2 uses backward-safe defaults (`strategy=single`), so no expected production behavior change until enabled in policy.
+
+### 2026-02-15 - Stage 3 Implemented (Experimental, Divergence Detected)
+
+Status: implemented but currently divergent from expectations
+
+Implemented:
+
+1. New boundary normalization module:
+   1. `app/core/analysis/span_normalizer.py`
+2. Service integration:
+   1. Postprocess pipeline runs after detection conversion.
+3. Config additions:
+   1. `analysis.postprocess.boundary.*`
+4. Policy wiring:
+   1. Enabled boundary postprocess in `external_rich` and `strict_profile`.
+5. Tests:
+   1. `tests/unit/test_span_normalizer.py`
+
+Observed results (Scanpatch test full, strict warm-up):
+
+1. Baseline reference (pre-Stage-3):
+   1. exact F1 `0.5906`
+   2. overlap F1 `0.6412`
+2. First Stage-3 run:
+   1. exact F1 `0.5474` (delta `-0.0433`)
+   2. overlap F1 `0.6366` (delta `-0.0046`)
+3. Heuristic tightening iteration:
+   1. exact F1 `0.5614` (delta `-0.0292`)
+   2. overlap F1 `0.6447` (delta `+0.0035`)
+
+Interpretation:
+
+1. This is a significant divergence from expected behavior (exact metric drop exceeds allowed stage-gate).
+2. Primary degradation is concentrated in `location` exact boundary alignment.
+3. According to execution policy for this project, implementation is paused here pending user decision.
+
 ## 1. Why this refactor
 
 Primary goal: materially improve real-world leakage prevention quality while keeping masking/unmasking behavior stable and production-safe.
@@ -584,4 +715,3 @@ Rationale:
    2. policy diff
    3. detector behavior changes
    4. known limitations
-

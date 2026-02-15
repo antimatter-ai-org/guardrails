@@ -1,9 +1,12 @@
-.PHONY: sync deps-up deps-down dev-up dev-down run-api run-pytriton test-unit test-integration test-all download-models check-models eval-all eval-scanpatch eval-scanpatch-baseline eval-scanpatch-cascade finetune-prepare-scanpatch finetune-scanpatch-pipeline eval-finetuned-gliner
+.PHONY: sync deps-up deps-down dev-up dev-down run-api run-pytriton test-unit test-integration test-all download-models check-models eval-all eval-scanpatch eval-scanpatch-baseline eval-scanpatch-cascade eval-manifest eval-compare finetune-prepare-scanpatch finetune-scanpatch-pipeline eval-finetuned-gliner
 
 MODELS_DIR ?= ./.models
 POLICY_PATH ?= ./configs/policy.yaml
 EVAL_ENV_FILE ?= ./.env.eval
 EVAL_OUTPUT_DIR ?= ./reports/evaluations
+EVAL_BASE_REPORT ?=
+EVAL_CANDIDATE_REPORT ?=
+EVAL_COMPARISON_OUTPUT ?=
 FINETUNE_OUTPUT_DIR ?= ./reports/finetune/scanpatch_pipeline
 FINETUNE_MODEL_REF ?= ./reports/finetune/scanpatch_pipeline/runs/iter_01/final
 
@@ -55,6 +58,12 @@ eval-scanpatch-baseline:
 
 eval-scanpatch-cascade:
 	uv run --extra eval python -m app.eval.run --dataset scanpatch/pii-ner-corpus-synthetic-controlled --split test --policy-path $(POLICY_PATH) --policy-name external_default --mode cascade --cascade-threshold 0.15 --cascade-heavy-recognizers gliner_pii_multilingual --env-file $(EVAL_ENV_FILE) --output-dir $(EVAL_OUTPUT_DIR)
+
+eval-manifest:
+	uv run --extra eval python -m app.tools.create_eval_manifest --report $(EVAL_BASE_REPORT) --output $(EVAL_OUTPUT_DIR)/baseline_manifest.json
+
+eval-compare:
+	uv run --extra eval python -m app.tools.compare_eval_reports --base $(EVAL_BASE_REPORT) --candidate $(EVAL_CANDIDATE_REPORT) $(if $(EVAL_COMPARISON_OUTPUT),--output $(EVAL_COMPARISON_OUTPUT),)
 
 finetune-prepare-scanpatch:
 	uv run --extra eval python -m app.tools.prepare_gliner_scanpatch_data --dataset scanpatch/pii-ner-corpus-synthetic-controlled --env-file $(EVAL_ENV_FILE)

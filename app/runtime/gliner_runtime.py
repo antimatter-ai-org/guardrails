@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import re
 import threading
+import time
 from abc import ABC, abstractmethod
 from typing import Any
 
@@ -15,6 +16,18 @@ from app.runtime.torch_runtime import resolve_cpu_runtime_device
 class GlinerRuntime(ABC):
     @abstractmethod
     def predict_entities(self, text: str, labels: list[str], threshold: float) -> list[dict[str, Any]]:
+        raise NotImplementedError
+
+    @abstractmethod
+    def warm_up(self, timeout_s: float) -> bool:
+        raise NotImplementedError
+
+    @abstractmethod
+    def is_ready(self) -> bool:
+        raise NotImplementedError
+
+    @abstractmethod
+    def load_error(self) -> str | None:
         raise NotImplementedError
 
 
@@ -68,6 +81,32 @@ class LocalCpuGlinerRuntime(GlinerRuntime):
             predict_batch=self._predict_batch,
         )
 
+    def warm_up(self, timeout_s: float) -> bool:
+        self._ensure_loading_started()
+        timeout = max(0.0, float(timeout_s))
+        if self._model is not None:
+            return True
+        if self._load_error:
+            return False
+
+        if timeout == 0.0:
+            return self._model is not None
+
+        started = time.monotonic()
+        while (time.monotonic() - started) < timeout:
+            if self._model is not None:
+                return True
+            if self._load_error:
+                return False
+            time.sleep(0.05)
+        return self._model is not None
+
+    def is_ready(self) -> bool:
+        return self._model is not None
+
+    def load_error(self) -> str | None:
+        return self._load_error
+
     def _predict_batch(self, texts: list[str], labels: list[str], threshold: float) -> list[list[dict[str, Any]]]:
         if self._model is None:
             return [[] for _ in texts]
@@ -111,6 +150,8 @@ class PyTritonGlinerRuntime(GlinerRuntime):
         self._chunking = (chunking or GlinerChunkingConfig()).normalized()
         self._max_batch_size_hint = 32
         self.device = "cuda"
+        self._ready = False
+        self._load_error: str | None = None
 
     @staticmethod
     def _extract_detection_payload(output: Any) -> str:
@@ -132,6 +173,48 @@ class PyTritonGlinerRuntime(GlinerRuntime):
             chunking=self._chunking,
             predict_batch=self._predict_batch,
         )
+
+    def warm_up(self, timeout_s: float) -> bool:
+        if self._ready:
+            return True
+        timeout = max(0.1, float(timeout_s))
+        try:
+            from pytriton.client import ModelClient
+        except Exception as exc:
+            self._load_error = f"pytriton import error: {exc}"
+            return False
+
+        text_batch = np.array([[b"warmup"]], dtype=object)
+        labels_batch = np.array([[b'["person"]']], dtype=object)
+        threshold_batch = np.array([[0.5]], dtype=np.float32)
+        init_timeout_s = min(self._init_timeout_s, timeout)
+        infer_timeout_s = min(self._infer_timeout_s, timeout)
+
+        try:
+            with ModelClient(
+                url=self._pytriton_url,
+                model_name=self._model_name,
+                init_timeout_s=init_timeout_s,
+                inference_timeout_s=infer_timeout_s,
+            ) as client:
+                result = client.infer_batch(
+                    text=text_batch,
+                    labels_json=labels_batch,
+                    threshold=threshold_batch,
+                )
+                self._parse_detections_payload(result.get("detections_json", []))
+            self._ready = True
+            self._load_error = None
+            return True
+        except Exception as exc:
+            self._load_error = str(exc)
+            return False
+
+    def is_ready(self) -> bool:
+        return self._ready
+
+    def load_error(self) -> str | None:
+        return self._load_error
 
     @staticmethod
     def _extract_server_max_batch_size(error: Exception) -> int | None:
