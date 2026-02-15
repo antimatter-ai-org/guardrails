@@ -84,9 +84,7 @@ Implemented:
 1. Language resolver upgrade:
    1. Added script profiling helpers (`mostly_cyrillic`, `mostly_latin`, `mixed`, `no_letters`).
    2. Added `resolve_languages(...)` with `single|union` strategy.
-2. Config model additions:
-   1. `language.strategy`
-   2. `language.union_min_share`
+2. Initial config model additions were introduced during implementation and later removed per user direction.
 3. Analysis service update:
    1. Added `resolve_languages(...)` method.
    2. Multi-language analysis path with dedup of identical spans.
@@ -98,7 +96,7 @@ Implemented:
 Results:
 
 1. Unit suite passed (`75 passed`).
-2. Stage 2 uses backward-safe defaults (`strategy=single`), so no expected production behavior change until enabled in policy.
+2. Final state after direction update: Stage 2 behavior is always-on in code, with no new policy-level options.
 
 ### 2026-02-15 - Stage 3 Implemented (Experimental, Divergence Detected)
 
@@ -134,6 +132,98 @@ Interpretation:
 1. This is a significant divergence from expected behavior (exact metric drop exceeds allowed stage-gate).
 2. Primary degradation is concentrated in `location` exact boundary alignment.
 3. According to execution policy for this project, implementation is paused here pending user decision.
+
+### 2026-02-15 - Direction Update Applied
+
+Status: completed
+
+User direction received:
+
+1. Keep new logic in code.
+2. Enable behavior always.
+3. Do not introduce additional configuration options at this point.
+4. Accept current degradation and continue executing the plan.
+
+Actions taken:
+
+1. Removed newly introduced policy/config toggles for Stage 2/3.
+2. Kept Stage 2/3 behavior always-on in code paths.
+3. Continued implementation to Stage 4/5/6 without stopping.
+
+### 2026-02-15 - Stage 4 and Stage 5 Implemented
+
+Status: completed
+
+Implemented:
+
+1. Identifier recall improvement pack (Stage 4):
+   1. Expanded `identifier_regex` pattern coverage for compact letter+digit IDs and keyword-linked IDs.
+   2. Added `inn/tin` keyword-number pattern.
+2. High-FP regex calibration (Stage 5):
+   1. Restricted `en_pii_regex` to `languages: ["en"]`.
+   2. Removed permissive `intl_phone` regex pattern.
+
+Results:
+
+1. Rubai test slice (`max-samples=2000`) improved strongly:
+   1. exact canonical F1: `0.3678`
+   2. overlap canonical F1: `0.8343`
+   3. identifier exact F1: `0.4217`
+2. Scanpatch full test remains below pre-Stage-3 baseline:
+   1. exact canonical F1: `0.5610` (vs old baseline `0.5906`)
+   2. overlap canonical F1: `0.6451`
+3. Behavior accepted per explicit user direction to continue despite degradation.
+
+### 2026-02-15 - Stage 6 Implemented
+
+Status: completed
+
+Implemented:
+
+1. Leakage-centric metric layer in evaluation:
+   1. `char_canonical` (char-level precision/recall/F1)
+   2. `token_canonical` (token-level precision/recall/F1)
+   3. `per_label_char`
+   4. `residual_miss_ratio` for every metric payload
+2. Report format updates:
+   1. JSON includes new metrics.
+   2. Markdown includes combined and per-label char metrics with residuals.
+3. Documentation updates:
+   1. `docs/EVALUATION.md` extended with new metric definitions.
+
+Validation:
+
+1. Unit tests: `75 passed`.
+2. Eval smoke run confirmed new report fields and markdown sections are present and populated.
+
+### 2026-02-15 - Stage 7 Implemented (Phase 1)
+
+Status: partially completed
+
+Implemented in this phase:
+
+1. Multi-policy matrix runner:
+   1. `app/tools/eval_matrix.py`
+   2. Runs `app.eval.run` for each policy in one command.
+   3. Auto-generates base-vs-candidate comparison markdown.
+2. Makefile integration:
+   1. Added `eval-matrix` target.
+3. Unit tests:
+   1. `tests/unit/test_eval_matrix.py`
+4. Docs:
+   1. Updated `docs/EVALUATION.md` with matrix usage.
+
+Phase 1 results:
+
+1. Matrix smoke test passed end-to-end:
+   1. `external_default` and `strict_block` runs completed.
+   2. Comparison markdown produced automatically.
+2. Unit tests after Stage 7 additions: `77 passed`.
+
+Remaining Stage 7 scope (not yet implemented):
+
+1. Resume/checkpoint support for interrupted long runs.
+2. Built-in detector ablation orchestration inside matrix runner.
 
 ## 1. Why this refactor
 

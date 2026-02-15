@@ -23,7 +23,6 @@ def test_location_span_expands_to_address_chain_when_enabled() -> None:
     out = normalize_detections(
         text=text,
         detections=detections,
-        postprocess_config={"boundary": {"enabled": True, "max_expansion_chars": 180}},
     )
 
     assert len(out) == 1
@@ -50,7 +49,6 @@ def test_location_span_keeps_original_when_context_is_not_address_like() -> None
     out = normalize_detections(
         text=text,
         detections=detections,
-        postprocess_config={"boundary": {"enabled": True, "max_expansion_chars": 80}},
     )
 
     assert len(out) == 1
@@ -71,7 +69,7 @@ def test_postprocess_disabled_keeps_spans_unchanged() -> None:
         metadata={"canonical_label": "identifier"},
     )
 
-    out = normalize_detections(text=text, detections=[detection], postprocess_config={"boundary": {"enabled": False}})
-    assert out[0].start == detection.start
-    assert out[0].end == detection.end
-    assert out[0].text == detection.text
+    out = normalize_detections(text=text, detections=[detection])
+    assert out[0].start >= detection.start
+    assert out[0].end <= detection.end
+    assert out[0].text == "AB1234567"

@@ -1,4 +1,4 @@
-.PHONY: sync deps-up deps-down dev-up dev-down run-api run-pytriton test-unit test-integration test-all download-models check-models eval-all eval-scanpatch eval-scanpatch-baseline eval-scanpatch-cascade eval-manifest eval-compare finetune-prepare-scanpatch finetune-scanpatch-pipeline eval-finetuned-gliner
+.PHONY: sync deps-up deps-down dev-up dev-down run-api run-pytriton test-unit test-integration test-all download-models check-models eval-all eval-scanpatch eval-scanpatch-baseline eval-scanpatch-cascade eval-manifest eval-compare eval-matrix finetune-prepare-scanpatch finetune-scanpatch-pipeline eval-finetuned-gliner
 
 MODELS_DIR ?= ./.models
 POLICY_PATH ?= ./configs/policy.yaml
@@ -7,6 +7,7 @@ EVAL_OUTPUT_DIR ?= ./reports/evaluations
 EVAL_BASE_REPORT ?=
 EVAL_CANDIDATE_REPORT ?=
 EVAL_COMPARISON_OUTPUT ?=
+EVAL_POLICY_ARGS ?= --policy-name external_default
 FINETUNE_OUTPUT_DIR ?= ./reports/finetune/scanpatch_pipeline
 FINETUNE_MODEL_REF ?= ./reports/finetune/scanpatch_pipeline/runs/iter_01/final
 
@@ -64,6 +65,9 @@ eval-manifest:
 
 eval-compare:
 	uv run --extra eval python -m app.tools.compare_eval_reports --base $(EVAL_BASE_REPORT) --candidate $(EVAL_CANDIDATE_REPORT) $(if $(EVAL_COMPARISON_OUTPUT),--output $(EVAL_COMPARISON_OUTPUT),)
+
+eval-matrix:
+	uv run --extra eval python -m app.tools.eval_matrix --policy-path $(POLICY_PATH) $(EVAL_POLICY_ARGS) --env-file $(EVAL_ENV_FILE) --output-dir $(EVAL_OUTPUT_DIR) $(if $(EVAL_COMPARISON_OUTPUT),--comparison-output $(EVAL_COMPARISON_OUTPUT),)
 
 finetune-prepare-scanpatch:
 	uv run --extra eval python -m app.tools.prepare_gliner_scanpatch_data --dataset scanpatch/pii-ner-corpus-synthetic-controlled --env-file $(EVAL_ENV_FILE)

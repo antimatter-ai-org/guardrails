@@ -18,6 +18,7 @@ This repository includes a manual evaluation framework to benchmark guardrails r
 - Cascade shortcut: `make eval-scanpatch-cascade`
 - Baseline manifest: `make eval-manifest EVAL_BASE_REPORT=<report.json>`
 - Report comparison: `make eval-compare EVAL_BASE_REPORT=<base.json> EVAL_CANDIDATE_REPORT=<candidate.json>`
+- Policy matrix runner: `make eval-matrix EVAL_POLICY_ARGS="--policy-name external_default --policy-name strict_block"`
 
 Dataset selection:
 - `--dataset` omitted: run on all supported datasets.
@@ -59,7 +60,16 @@ Reports include:
 - `overlap_agnostic`: overlap span match, labels ignored.
 - `exact_canonical`: exact span + canonical label match.
 - `overlap_canonical`: overlap span + canonical label match.
+- `char_canonical`: character-level overlap metrics on canonical spans.
+- `token_canonical`: token-level overlap metrics on canonical spans.
 - `per_label_exact`: exact canonical metrics by label.
+- `per_label_char`: character-level canonical metrics by label.
+
+Each metric payload includes:
+- `precision`
+- `recall`
+- `f1`
+- `residual_miss_ratio` (computed as `1 - recall`)
 
 Canonical labels are normalized from:
 - dataset labels (adapter mapping)
@@ -112,6 +122,14 @@ make eval-compare \
 ```
 
 If `EVAL_COMPARISON_OUTPUT` is omitted, markdown is printed to stdout.
+
+To run multiple policies in one command and auto-compare candidates against the first report:
+
+```bash
+make eval-matrix \
+  EVAL_POLICY_ARGS="--policy-name external_default --policy-name strict_block" \
+  EVAL_COMPARISON_OUTPUT=reports/evaluations/comparison_matrix.md
+```
 
 ## Caching and Auth
 

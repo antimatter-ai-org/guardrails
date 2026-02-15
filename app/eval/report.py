@@ -17,6 +17,7 @@ def _metric_dict(metric: MetricCounts) -> dict[str, Any]:
         "precision": round(metric.precision, 6),
         "recall": round(metric.recall, 6),
         "f1": round(metric.f1, 6),
+        "residual_miss_ratio": round(1.0 - metric.recall, 6),
     }
 
 
@@ -26,9 +27,15 @@ def metrics_payload(aggregate: EvaluationAggregate) -> dict[str, Any]:
         "overlap_agnostic": _metric_dict(aggregate.overlap_agnostic),
         "exact_canonical": _metric_dict(aggregate.exact_canonical),
         "overlap_canonical": _metric_dict(aggregate.overlap_canonical),
+        "char_canonical": _metric_dict(aggregate.char_canonical),
+        "token_canonical": _metric_dict(aggregate.token_canonical),
         "per_label_exact": {
             label: _metric_dict(metric)
             for label, metric in sorted(aggregate.per_label_exact.items())
+        },
+        "per_label_char": {
+            label: _metric_dict(metric)
+            for label, metric in sorted(aggregate.per_label_char.items())
         },
     }
 
@@ -85,7 +92,14 @@ def render_markdown_summary(report: dict[str, Any]) -> str:
         "",
     ]
 
-    for metric_name in ("exact_agnostic", "overlap_agnostic", "exact_canonical", "overlap_canonical"):
+    for metric_name in (
+        "exact_agnostic",
+        "overlap_agnostic",
+        "exact_canonical",
+        "overlap_canonical",
+        "char_canonical",
+        "token_canonical",
+    ):
         metric = report["metrics"][metric_name]
         lines.append(
             (
@@ -93,6 +107,7 @@ def render_markdown_summary(report: dict[str, Any]) -> str:
                 f"P={metric['precision']:.4f}, "
                 f"R={metric['recall']:.4f}, "
                 f"F1={metric['f1']:.4f}, "
+                f"Residual={metric['residual_miss_ratio']:.4f}, "
                 f"TP={metric['true_positives']}, FP={metric['false_positives']}, FN={metric['false_negatives']}"
             )
         )
@@ -108,6 +123,21 @@ def render_markdown_summary(report: dict[str, Any]) -> str:
                 f"TP={metric['true_positives']}, FP={metric['false_positives']}, FN={metric['false_negatives']}"
             )
         )
+
+    per_label_char = report["metrics"].get("per_label_char", {})
+    if isinstance(per_label_char, dict) and per_label_char:
+        lines.append("")
+        lines.append("## Combined Per-Label (Char Canonical)")
+        lines.append("")
+        for label, metric in per_label_char.items():
+            lines.append(
+                (
+                    f"- `{label}`: P={metric['precision']:.4f}, "
+                    f"R={metric['recall']:.4f}, F1={metric['f1']:.4f}, "
+                    f"Residual={metric['residual_miss_ratio']:.4f}, "
+                    f"TP={metric['true_positives']}, FP={metric['false_positives']}, FN={metric['false_negatives']}"
+                )
+            )
 
     dataset_reports = report.get("datasets", [])
     if isinstance(dataset_reports, list) and dataset_reports:

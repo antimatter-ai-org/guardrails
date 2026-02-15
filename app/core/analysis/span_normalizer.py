@@ -137,20 +137,12 @@ def normalize_detections(
     *,
     text: str,
     detections: list[Detection],
-    postprocess_config: dict | None,
 ) -> list[Detection]:
     if not detections:
         return detections
-    cfg = postprocess_config or {}
-    boundary_cfg = cfg.get("boundary", {}) if isinstance(cfg, dict) else {}
-    if not isinstance(boundary_cfg, dict):
-        return detections
-    if not bool(boundary_cfg.get("enabled", False)):
-        return detections
-
-    max_expansion_chars = int(boundary_cfg.get("max_expansion_chars", 180))
-    normalize_location_enabled = bool(boundary_cfg.get("location_enabled", True))
-    normalize_identifier_enabled = bool(boundary_cfg.get("identifier_enabled", True))
+    max_expansion_chars = 180
+    normalize_location_enabled = True
+    normalize_identifier_enabled = True
 
     normalized: list[Detection] = []
     for item in detections:

@@ -21,8 +21,6 @@ class LanguageConfig(BaseModel):
     default: str = "ru"
     supported: list[str] = Field(default_factory=lambda: ["ru", "en"])
     detection: Literal["auto", "hint_only"] = "auto"
-    strategy: Literal["single", "union"] = "single"
-    union_min_share: float = 0.2
 
 
 class AnalysisConfig(BaseModel):
@@ -35,7 +33,6 @@ class AnalysisConfig(BaseModel):
     recognizers: list[str] = Field(default_factory=list)
     thresholds: dict[str, float] = Field(default_factory=dict)
     label_mapping: dict[str, str] = Field(default_factory=dict)
-    postprocess: dict[str, Any] = Field(default_factory=dict)
 
 
 class AnalyzerProfile(BaseModel):

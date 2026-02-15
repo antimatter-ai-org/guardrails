@@ -33,4 +33,7 @@ def test_evaluate_samples_label_aware() -> None:
     result = evaluate_samples([sample], predictions)
     assert result.exact_agnostic.true_positives == 1
     assert result.exact_canonical.true_positives == 1
+    assert result.char_canonical.true_positives == 4
+    assert result.token_canonical.true_positives == 1
     assert result.per_label_exact["person"].true_positives == 1
+    assert result.per_label_char["person"].true_positives == 4

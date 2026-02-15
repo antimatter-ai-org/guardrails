@@ -219,7 +219,6 @@ class PresidioAnalysisService:
         detections = normalize_detections(
             text=text,
             detections=detections,
-            postprocess_config=profile.analysis.postprocess,
         )
         return language, detections
 
@@ -257,6 +256,6 @@ class PresidioAnalysisService:
             supported=profile.language.supported,
             default_language=profile.language.default,
             detection_mode=profile.language.detection,
-            strategy=profile.language.strategy,
-            union_min_share=profile.language.union_min_share,
+            strategy="union",
+            union_min_share=0.2,
         )
