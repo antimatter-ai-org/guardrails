@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from dataclasses import replace
+import regex as re
 
 from app.models.entities import Detection
 
@@ -17,13 +18,44 @@ _LOCATION_MARKERS = (
     "манзил",
     "ko'chasi",
     "mavze",
+    "tumani",
+    "tuman",
+    "shahri",
+    "shahar",
     "xonadon",
     "uy",
+    "kvartira",
+    "dom",
     "квартир",
     "дом",
     "apartment",
     "apt",
     "house",
+)
+_LOCATION_CONTEXT_WORDS = (
+    "address",
+    "адрес",
+    "location",
+    "район",
+    "область",
+    "город",
+    "улиц",
+    "дом",
+    "квартир",
+    "корпус",
+    "подъезд",
+    "манзил",
+    "tumani",
+    "tuman",
+    "shahri",
+    "shahar",
+    "шахр",
+    "туман",
+    "street",
+    "district",
+    "city",
+    "house",
+    "apartment",
 )
 
 
@@ -78,6 +110,114 @@ def _looks_like_address(text_segment: str) -> bool:
     return marker_hits >= 2
 
 
+def _is_address_segment(segment_text: str) -> bool:
+    lowered = segment_text.lower().strip()
+    if not lowered:
+        return False
+    if any(marker in lowered for marker in _LOCATION_MARKERS):
+        return True
+    if any(char.isdigit() for char in lowered):
+        return True
+    # Covers short administrative fragments like "г. Москва", "р-н Арбат".
+    if re.search(r"(?i)\b(?:г\.?|город|р-н|район|ул\.?|улица|пр-кт|д\.?|кв\.?|city|st\.?|district)\b", lowered):
+        return True
+    return False
+
+
+def _location_clause_bounds(*, text: str, start: int, end: int, max_expansion_chars: int) -> tuple[int, int]:
+    left_limit = max(0, start - max_expansion_chars)
+    right_limit = min(len(text), end + max_expansion_chars)
+
+    left = start
+    while left > left_limit and text[left - 1] not in _SENTENCE_STOP_CHARS:
+        left -= 1
+
+    right = end
+    while right < right_limit and text[right] not in _SENTENCE_STOP_CHARS:
+        right += 1
+    return left, right
+
+
+def _split_comma_segments(text: str, start: int, end: int) -> list[tuple[int, int]]:
+    if end <= start:
+        return []
+    segments: list[tuple[int, int]] = []
+    seg_start = start
+    idx = start
+    while idx < end:
+        if text[idx] == ",":
+            segments.append((seg_start, idx))
+            seg_start = idx + 1
+        idx += 1
+    segments.append((seg_start, end))
+    return segments
+
+
+def _expand_location_comma_chain(
+    *,
+    text: str,
+    start: int,
+    end: int,
+    max_expansion_chars: int,
+) -> tuple[int, int]:
+    clause_start, clause_end = _location_clause_bounds(
+        text=text,
+        start=start,
+        end=end,
+        max_expansion_chars=max_expansion_chars,
+    )
+    segments = _split_comma_segments(text, clause_start, clause_end)
+    if not segments:
+        return start, end
+
+    first_idx = None
+    last_idx = None
+    for idx, (seg_start, seg_end) in enumerate(segments):
+        if seg_end <= start or seg_start >= end:
+            continue
+        if first_idx is None:
+            first_idx = idx
+        last_idx = idx
+    if first_idx is None or last_idx is None:
+        return start, end
+
+    selected_start = start
+    selected_end = end
+    remaining_chars = max_expansion_chars
+
+    current = last_idx + 1
+    while current < len(segments) and remaining_chars > 0:
+        seg_start, seg_end = segments[current]
+        segment_text = text[seg_start:seg_end]
+        if not _is_address_segment(segment_text):
+            break
+        new_start = selected_start
+        new_end = seg_end
+        growth = (new_end - new_start) - (selected_end - selected_start)
+        if growth > remaining_chars:
+            break
+        selected_end = new_end
+        remaining_chars -= max(0, growth)
+        current += 1
+
+    current = first_idx - 1
+    while current >= 0 and remaining_chars > 0:
+        seg_start, seg_end = segments[current]
+        segment_text = text[seg_start:seg_end]
+        if not _is_address_segment(segment_text):
+            break
+        new_start = seg_start
+        new_end = selected_end
+        growth = (new_end - new_start) - (selected_end - selected_start)
+        if growth > remaining_chars:
+            break
+        selected_start = new_start
+        remaining_chars -= max(0, growth)
+        current -= 1
+
+    return _trim_bounds(text, selected_start, selected_end)
+
+
 def _normalize_location(
     *,
     text: str,
@@ -89,24 +229,26 @@ def _normalize_location(
         return detection
 
     original_text = text[start:end]
-    expanded_start, expanded_end = _expand_until_sentence_boundary(
+    around_start = max(0, start - 24)
+    around_end = min(len(text), end + 24)
+    context_window = text[around_start:around_end].lower()
+    has_context_signal = any(marker in context_window for marker in _LOCATION_CONTEXT_WORDS)
+    if not has_context_signal and not _looks_like_address(original_text):
+        return replace(detection, start=start, end=end, text=original_text)
+
+    expanded_start, expanded_end = _expand_location_comma_chain(
         text=text,
         start=start,
         end=end,
         max_expansion_chars=max_expansion_chars,
     )
+    expanded_text = text[expanded_start:expanded_end]
     if expanded_end <= expanded_start:
         return replace(detection, start=start, end=end, text=original_text)
-
-    expanded_text = text[expanded_start:expanded_end]
-    expanded_delta = (expanded_end - expanded_start) - (end - start)
-    if expanded_delta <= 0:
+    if (expanded_end - expanded_start) <= (end - start):
         return replace(detection, start=start, end=end, text=original_text)
-    if expanded_delta > max_expansion_chars:
+    if not _is_address_segment(expanded_text):
         return replace(detection, start=start, end=end, text=original_text)
-    if not _looks_like_address(expanded_text):
-        return replace(detection, start=start, end=end, text=original_text)
-
     return replace(detection, start=expanded_start, end=expanded_end, text=expanded_text)
 
 

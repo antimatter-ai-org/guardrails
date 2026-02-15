@@ -26,7 +26,8 @@ def test_location_span_expands_to_address_chain_when_enabled() -> None:
     )
 
     assert len(out) == 1
-    assert out[0].text.startswith("Manzil:")
+    assert not out[0].text.startswith("Manzil:")
+    assert out[0].text.startswith("Toshkent")
     assert "12-uy" in out[0].text
 
 

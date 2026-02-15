@@ -297,6 +297,98 @@ Results:
 2. Full unit suite after Stage 9: `95 passed, 2 skipped`.
 3. No significant divergence from expected implementation behavior observed.
 
+### 2026-02-15 - Post-Stage Experiment: Location Boundary Tightening + Card Validation
+
+Status: implemented and evaluated, significant divergence detected
+
+Implemented (local branch, not yet finalized):
+
+1. Location postprocess tightening:
+   1. Replaced sentence-wide location expansion with conservative comma-chain expansion.
+   2. Added transliterated RU/UZ address marker coverage.
+2. Payment-card validation gate:
+   1. Added Luhn-based validator.
+   2. Added grouped-card fallback requiring nearby card context markers.
+
+Evaluation (GPU host, full test split on all datasets):
+
+1. Baseline before change:
+   1. report: `eval_all_datasets_test_baseline_20260215T110716Z.json`
+   2. exact canonical F1: `0.2913`
+   3. overlap canonical F1: `0.8055`
+   4. char canonical F1: `0.7204`
+2. After change:
+   1. report: `eval_all_datasets_test_baseline_20260215T113118Z.json`
+   2. exact canonical F1: `0.2888` (delta `-0.0025`)
+   3. overlap canonical F1: `0.7487` (delta `-0.0568`)
+   4. char canonical F1: `0.6800` (delta `-0.0404`)
+
+Interpretation:
+
+1. This is a significant degradation.
+2. Largest regression source is `payment_card` recall collapse:
+   1. exact F1 `0.1567 -> 0.0389`
+   2. TP `1163 -> 158`, FN `6030 -> 7035`
+3. `location` exact improved slightly (`0.0190 -> 0.0209`) but did not offset global loss.
+
+Action required:
+
+1. Per execution policy, significant divergence requires user confirmation before finalizing/keeping this change set.
+
+### 2026-02-15 - Post-Stage Experiment Iteration 2: Soft Card Gating (First Attempt)
+
+Status: implemented and evaluated, still divergent
+
+Implemented:
+
+1. Removed hard rejection for grouped non-Luhn card candidates.
+2. Kept conservative location expansion changes.
+
+Evaluation:
+
+1. report: `eval_all_datasets_test_baseline_20260215T120535Z.json`
+2. vs baseline `20260215T110716Z`:
+   1. exact canonical F1: `0.2913 -> 0.2918` (delta `+0.0005`)
+   2. overlap canonical F1: `0.8055 -> 0.7679` (delta `-0.0376`)
+   3. char canonical F1: `0.7204 -> 0.6958` (delta `-0.0246`)
+
+Interpretation:
+
+1. Hard-regression on payment cards was partially recovered, but overlap/char remained too low.
+2. Divergence still considered significant.
+
+### 2026-02-15 - Post-Stage Experiment Iteration 3: Score Calibration Without Hard Drop
+
+Status: implemented and evaluated, accepted
+
+Implemented:
+
+1. Payment-card logic updated to:
+   1. Reject only clearly invalid spans (digit length out of range, uniform digits).
+   2. Avoid hard dropping weak-but-plausible spans.
+   3. Apply mild score calibration for weak continuous card-like patterns.
+2. Kept conservative location expansion updates.
+
+Evaluation:
+
+1. report: `eval_all_datasets_test_baseline_20260215T121912Z.json`
+2. vs baseline `20260215T110716Z`:
+   1. exact canonical F1: `0.2913 -> 0.2903` (delta `-0.0010`)
+   2. overlap canonical F1: `0.8055 -> 0.8052` (delta `-0.0003`)
+   3. char canonical F1: `0.7204 -> 0.7316` (delta `+0.0112`)
+   4. token canonical F1: `0.7321 -> 0.7552` (delta `+0.0230`)
+3. Label-level highlights:
+   1. `location` exact F1: `0.0190 -> 0.0209` (improved).
+   2. `payment_card` exact F1: `0.1567 -> 0.1581` (slightly improved).
+
+Interpretation:
+
+1. This iteration is consistent with goals:
+   1. leakage-centric metrics improved materially
+   2. strict overlap stayed effectively flat
+   3. exact moved only slightly (`-0.0010`)
+2. Change set accepted as the current best variant.
+
 ## 1. Why this refactor
 
 Primary goal: materially improve real-world leakage prevention quality while keeping masking/unmasking behavior stable and production-safe.

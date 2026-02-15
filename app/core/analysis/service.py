@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
+import regex as re
 from time import perf_counter
 from typing import Any
 
@@ -23,6 +24,19 @@ class PresidioAnalysisService:
     _MAX_SAMPLE_ANALYSIS_SECONDS = 5.0
     _MAX_SAMPLE_DETECTIONS = 256
     _MAX_RAW_RECOGNIZER_RESULTS = 1024
+    _PAYMENT_CARD_CONTEXT_MARKERS = (
+        "card",
+        "credit",
+        "debit",
+        "visa",
+        "mastercard",
+        "amex",
+        "payment",
+        "карта",
+        "номер карты",
+        "банковск",
+        "платеж",
+    )
 
     def __init__(self, policy_config: PolicyConfig) -> None:
         self._config = policy_config
@@ -193,6 +207,82 @@ class PresidioAnalysisService:
         for key, value in source.items():
             target[key] = target.get(key, 0) + int(value)
 
+    @staticmethod
+    def _luhn_check(digits: str) -> bool:
+        if not digits or not digits.isdigit():
+            return False
+        total = 0
+        parity = len(digits) % 2
+        for idx, char in enumerate(digits):
+            value = int(char)
+            if idx % 2 == parity:
+                value *= 2
+                if value > 9:
+                    value -= 9
+            total += value
+        return total % 10 == 0
+
+    @classmethod
+    def _is_valid_payment_card_detection(cls, *, text: str, start: int, end: int) -> bool:
+        return cls._payment_card_signal(text=text, start=start, end=end)["keep"]
+
+    @classmethod
+    def _payment_card_signal(cls, *, text: str, start: int, end: int) -> dict[str, Any]:
+        if end <= start:
+            return {
+                "keep": False,
+                "digits_count": 0,
+                "luhn_valid": False,
+                "grouped_like_card": False,
+                "has_context": False,
+                "score_multiplier": 1.0,
+                "score_bonus": 0.0,
+            }
+        snippet = text[start:end]
+        digits = "".join(char for char in snippet if char.isdigit())
+        grouped_like_card = bool(re.fullmatch(r"(?:\d{4}[ -]){2,4}\d{1,4}", re.sub(r"\s+", " ", snippet.strip())))
+        context_start = max(0, start - 32)
+        context_end = min(len(text), end + 32)
+        context = text[context_start:context_end].lower()
+        has_context = any(marker in context for marker in cls._PAYMENT_CARD_CONTEXT_MARKERS)
+        luhn_valid = cls._luhn_check(digits)
+        if len(digits) < 13 or len(digits) > 19:
+            return {
+                "keep": False,
+                "digits_count": len(digits),
+                "luhn_valid": luhn_valid,
+                "grouped_like_card": grouped_like_card,
+                "has_context": has_context,
+                "score_multiplier": 1.0,
+                "score_bonus": 0.0,
+            }
+        if len(set(digits)) < 2:
+            return {
+                "keep": False,
+                "digits_count": len(digits),
+                "luhn_valid": luhn_valid,
+                "grouped_like_card": grouped_like_card,
+                "has_context": has_context,
+                "score_multiplier": 1.0,
+                "score_bonus": 0.0,
+            }
+        weak_continuous = not grouped_like_card and not luhn_valid and not has_context
+        score_multiplier = 0.9 if weak_continuous else 1.0
+        score_bonus = 0.0
+        if luhn_valid:
+            score_bonus = 0.08
+        elif grouped_like_card and has_context:
+            score_bonus = 0.03
+        return {
+            "keep": True,
+            "digits_count": len(digits),
+            "luhn_valid": luhn_valid,
+            "grouped_like_card": grouped_like_card,
+            "has_context": has_context,
+            "score_multiplier": score_multiplier,
+            "score_bonus": score_bonus,
+        }
+
     def analyze_text(
         self,
         *,
@@ -295,17 +385,33 @@ class PresidioAnalysisService:
 
         detections: list[Detection] = []
         for result_language, result in deduped_results:
-            threshold = self._result_threshold(result, profile=profile, policy_min_score=policy_min_score)
-            if float(result.score) < threshold:
-                continue
-
             entity_type = result.entity_type.strip().upper()
             canonical = canonicalize_entity_type(entity_type, custom_mapping=profile.analysis.label_mapping)
+            score = float(result.score)
+            card_signal: dict[str, Any] | None = None
+            if canonical == "payment_card":
+                card_signal = self._payment_card_signal(
+                    text=text,
+                    start=int(result.start),
+                    end=int(result.end),
+                )
+                if not bool(card_signal.get("keep")):
+                    continue
+                detector_name = str((result.recognition_metadata or {}).get("recognizer_name", ""))
+                if ":CREDIT_CARD:" in detector_name:
+                    score *= float(card_signal.get("score_multiplier", 1.0))
+                score = min(1.0, score + float(card_signal.get("score_bonus", 0.0)))
+
+            threshold = self._result_threshold(result, profile=profile, policy_min_score=policy_min_score)
+            if score < threshold:
+                continue
             metadata = dict(result.recognition_metadata or {})
             metadata["entity_type"] = entity_type
             metadata["canonical_label"] = canonical
             metadata["language"] = result_language
             metadata["analysis_languages"] = languages
+            if card_signal is not None:
+                metadata["payment_card_signal"] = card_signal
 
             label = canonical.upper() if canonical else entity_type
             detections.append(
@@ -314,7 +420,7 @@ class PresidioAnalysisService:
                     end=int(result.end),
                     text=text[int(result.start) : int(result.end)],
                     label=label,
-                    score=float(result.score),
+                    score=score,
                     detector=str(metadata.get("recognizer_name", "presidio")),
                     metadata=metadata,
                 )
