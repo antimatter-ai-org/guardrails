@@ -193,37 +193,75 @@ Implemented:
 
 Validation:
 
-1. Unit tests: `75 passed`.
+1. Unit tests: `83 passed`.
 2. Eval smoke run confirmed new report fields and markdown sections are present and populated.
 
-### 2026-02-15 - Stage 7 Implemented (Phase 1)
+### 2026-02-15 - Stage 7 Implemented
 
-Status: partially completed
+Status: completed (planned scope covered)
 
-Implemented in this phase:
+Implemented:
 
 1. Multi-policy matrix runner:
    1. `app/tools/eval_matrix.py`
-   2. Runs `app.eval.run` for each policy in one command.
+   2. Runs `app.eval.run` for each selected policy in one command.
    3. Auto-generates base-vs-candidate comparison markdown.
-2. Makefile integration:
-   1. Added `eval-matrix` target.
-3. Unit tests:
+2. Built-in ablation orchestration:
+   1. `--ablate-recognizer` repeatable option in matrix runner.
+   2. Auto-generates ablation policy YAML files under `reports/evaluations/_ablation_policies/`.
+   3. Executes ablation variants and includes them in final comparison.
+3. Resume/checkpoint support in evaluator:
+   1. `app.eval.run` now supports `--resume`.
+   2. Dataset-level checkpoint persistence under `reports/evaluations/_checkpoints/`.
+   3. Completed datasets are skipped on resumed runs.
+4. Makefile/docs integration:
+   1. `eval-matrix` supports ablation and resume flags.
+   2. `docs/EVALUATION.md` updated with usage examples.
+5. Tests:
    1. `tests/unit/test_eval_matrix.py`
-4. Docs:
-   1. Updated `docs/EVALUATION.md` with matrix usage.
+   2. `tests/unit/test_eval_resume.py`
 
-Phase 1 results:
+Results:
 
-1. Matrix smoke test passed end-to-end:
-   1. `external_default` and `strict_block` runs completed.
-   2. Comparison markdown produced automatically.
-2. Unit tests after Stage 7 additions: `77 passed`.
+1. Resume smoke test passed:
+   1. Second run loaded checkpoint and skipped completed dataset.
+2. Ablation smoke test passed:
+   1. Base + `gliner_pii_multilingual` ablation run completed.
+   2. Auto-comparison markdown produced.
+3. Unit tests after Stage 7 completion: `83 passed`.
 
-Remaining Stage 7 scope (not yet implemented):
+### 2026-02-15 - Stage 8 Implemented
 
-1. Resume/checkpoint support for interrupted long runs.
-2. Built-in detector ablation orchestration inside matrix runner.
+Status: completed
+
+Implemented:
+
+1. New pluggable recognizer type:
+   1. `hf_token_classifier` is now supported by config schema and registry builder.
+   2. Added `HFTokenClassifierRecognizer` in `app/core/analysis/recognizers.py`.
+2. Runtime behavior and graceful degradation:
+   1. Uses local in-process runtime path (CPU/MPS), including when project runtime is `cuda`.
+   2. Adds inference timeout guard.
+   3. Returns empty result set on model load/inference failures instead of failing the whole request.
+3. Offline model asset support:
+   1. Added generic HF model source resolver in `app/model_assets.py`.
+   2. `hf_token_classifier` respects `GR_MODEL_DIR` and `GR_OFFLINE_MODE`.
+4. Air-gapped download workflow:
+   1. `app/tools/download_models.py` now discovers and downloads all `hf_token_classifier` models declared in policy.
+   2. `manifest.json` now includes `hf_token_classifier_models`.
+5. Documentation updates:
+   1. Added `hf_token_classifier` detector behavior to `docs/DETECTORS.md`.
+   2. Updated air-gapped model bundle description in `README.md`.
+6. Tests:
+   1. Added `tests/unit/test_hf_token_classifier_recognizer.py`.
+   2. Added `tests/unit/test_download_models.py`.
+   3. Extended `tests/unit/test_model_assets.py` for HF resolver helpers.
+
+Results:
+
+1. Targeted new/updated tests passed: `17 passed`.
+2. Full unit suite after Stage 8: `93 passed, 2 skipped`.
+3. No metric delta is expected yet because `hf_token_classifier` is added as a pluggable recognizer type and is not enabled in default policy profiles.
 
 ## 1. Why this refactor
 

@@ -11,7 +11,9 @@ from app.model_assets import (
     apply_model_env,
     gliner_repo_dirname,
     gliner_local_dir,
+    hf_model_local_dir,
     natasha_local_paths,
+    resolve_hf_model_source,
     resolve_gliner_model_source,
 )
 
@@ -35,6 +37,46 @@ def test_resolve_gliner_model_source_with_model_dir(tmp_path: Path) -> None:
 def test_resolve_gliner_model_source_non_strict_fallback(tmp_path: Path) -> None:
     model_name = "urchade/gliner_multi-v2.1"
     assert resolve_gliner_model_source(model_name, str(tmp_path), strict=False) == model_name
+
+
+def test_hf_model_local_dir() -> None:
+    assert hf_model_local_dir("/tmp/models", "hf_token_classifier", "dslim/bert-base-NER") == Path(
+        "/tmp/models/hf_token_classifier/dslim__bert-base-NER"
+    )
+
+
+def test_resolve_hf_model_source_with_model_dir(tmp_path: Path) -> None:
+    model_name = "dslim/bert-base-NER"
+    local_dir = hf_model_local_dir(str(tmp_path), "hf_token_classifier", model_name)
+    local_dir.mkdir(parents=True)
+
+    assert (
+        resolve_hf_model_source(model_name=model_name, model_dir=str(tmp_path), namespace="hf_token_classifier")
+        == str(local_dir)
+    )
+
+
+def test_resolve_hf_model_source_non_strict_fallback(tmp_path: Path) -> None:
+    model_name = "dslim/bert-base-NER"
+    assert (
+        resolve_hf_model_source(
+            model_name=model_name,
+            model_dir=str(tmp_path),
+            namespace="hf_token_classifier",
+            strict=False,
+        )
+        == model_name
+    )
+
+
+def test_resolve_hf_model_source_strict_missing(tmp_path: Path) -> None:
+    with pytest.raises(FileNotFoundError):
+        resolve_hf_model_source(
+            model_name="dslim/bert-base-NER",
+            model_dir=str(tmp_path),
+            namespace="hf_token_classifier",
+            strict=True,
+        )
 
 
 def test_natasha_local_paths(tmp_path: Path) -> None:

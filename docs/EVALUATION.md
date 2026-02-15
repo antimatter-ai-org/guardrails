@@ -131,6 +131,21 @@ make eval-matrix \
   EVAL_COMPARISON_OUTPUT=reports/evaluations/comparison_matrix.md
 ```
 
+To include recognizer ablations and resume support:
+
+```bash
+make eval-matrix \
+  EVAL_POLICY_ARGS="--policy-name external_default" \
+  EVAL_ABLATION_ARGS="--ablate-recognizer gliner_pii_multilingual --ablate-recognizer identifier_regex" \
+  EVAL_RESUME=--resume \
+  EVAL_COMPARISON_OUTPUT=reports/evaluations/comparison_matrix_ablation.md
+```
+
+`app.eval.run` checkpoint/resume options:
+- `--resume`: load dataset-level checkpoint and skip completed datasets.
+- `--checkpoint-path`: optional explicit checkpoint JSON path.
+- Default checkpoint location: `reports/evaluations/_checkpoints/eval_checkpoint_<hash>.json`.
+
 ## Caching and Auth
 
 - Dataset cache default: `.eval_cache/hf`

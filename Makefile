@@ -8,6 +8,8 @@ EVAL_BASE_REPORT ?=
 EVAL_CANDIDATE_REPORT ?=
 EVAL_COMPARISON_OUTPUT ?=
 EVAL_POLICY_ARGS ?= --policy-name external_default
+EVAL_ABLATION_ARGS ?=
+EVAL_RESUME ?= --no-resume
 FINETUNE_OUTPUT_DIR ?= ./reports/finetune/scanpatch_pipeline
 FINETUNE_MODEL_REF ?= ./reports/finetune/scanpatch_pipeline/runs/iter_01/final
 
@@ -67,7 +69,7 @@ eval-compare:
 	uv run --extra eval python -m app.tools.compare_eval_reports --base $(EVAL_BASE_REPORT) --candidate $(EVAL_CANDIDATE_REPORT) $(if $(EVAL_COMPARISON_OUTPUT),--output $(EVAL_COMPARISON_OUTPUT),)
 
 eval-matrix:
-	uv run --extra eval python -m app.tools.eval_matrix --policy-path $(POLICY_PATH) $(EVAL_POLICY_ARGS) --env-file $(EVAL_ENV_FILE) --output-dir $(EVAL_OUTPUT_DIR) $(if $(EVAL_COMPARISON_OUTPUT),--comparison-output $(EVAL_COMPARISON_OUTPUT),)
+	uv run --extra eval python -m app.tools.eval_matrix --policy-path $(POLICY_PATH) $(EVAL_POLICY_ARGS) $(EVAL_ABLATION_ARGS) $(EVAL_RESUME) --env-file $(EVAL_ENV_FILE) --output-dir $(EVAL_OUTPUT_DIR) $(if $(EVAL_COMPARISON_OUTPUT),--comparison-output $(EVAL_COMPARISON_OUTPUT),)
 
 finetune-prepare-scanpatch:
 	uv run --extra eval python -m app.tools.prepare_gliner_scanpatch_data --dataset scanpatch/pii-ner-corpus-synthetic-controlled --env-file $(EVAL_ENV_FILE)

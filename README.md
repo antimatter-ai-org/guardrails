@@ -53,7 +53,10 @@ Download all required models into a single directory:
 make download-models MODELS_DIR=./.models
 ```
 
-This writes a model bundle and `manifest.json` into `./.models`.
+This writes a model bundle and `manifest.json` into `./.models`:
+- GLiNER models from recognizer definitions
+- Transformer NLP models from analyzer profiles
+- Hugging Face token-classifier models from `hf_token_classifier` recognizers
 
 Run service in offline mode on host:
 

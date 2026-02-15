@@ -59,6 +59,33 @@ def resolve_gliner_model_source(model_name: str, model_dir: str | None, *, stric
     return model_name
 
 
+def hf_model_local_dir(model_dir: str, namespace: str, model_name: str) -> Path:
+    return Path(model_dir) / namespace / model_name.replace("/", "__")
+
+
+def resolve_hf_model_source(
+    *,
+    model_name: str,
+    model_dir: str | None,
+    namespace: str,
+    strict: bool = False,
+) -> str:
+    if not model_dir:
+        return model_name
+
+    local_dir = hf_model_local_dir(model_dir, namespace, model_name)
+    if local_dir.exists():
+        return str(local_dir)
+
+    explicit = Path(model_name)
+    if explicit.exists():
+        return str(explicit)
+
+    if strict:
+        raise FileNotFoundError(f"Model not found in model_dir: {local_dir}")
+    return model_name
+
+
 def natasha_local_paths(model_dir: str | None, *, strict: bool = False) -> tuple[str | None, str | None]:
     base_dir = _normalize_model_dir(model_dir)
     if base_dir is None:

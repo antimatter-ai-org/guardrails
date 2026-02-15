@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
+import json
 import os
 import time
 from collections import defaultdict
@@ -14,10 +16,10 @@ from app.core.analysis.service import PresidioAnalysisService
 from app.eval.datasets.registry import get_dataset_adapter, list_supported_datasets
 from app.eval.env import load_env_file
 from app.eval.labels import canonicalize_prediction_label
-from app.eval.metrics import evaluate_samples, match_counts
+from app.eval.metrics import EvaluationAggregate, evaluate_samples, match_counts
 from app.eval.predictor import merge_cascade_detections, sample_uncertainty_score
 from app.eval.report import build_report_payload, metrics_payload, write_report_files
-from app.eval.types import EvalSample, EvalSpan
+from app.eval.types import EvalSample, EvalSpan, MetricCounts
 from app.model_assets import apply_model_env
 
 
@@ -89,6 +91,17 @@ def _parse_args() -> argparse.Namespace:
         action=argparse.BooleanOptionalAction,
         default=False,
         help="Fail the run if any runtime-backed recognizer fails warm-up.",
+    )
+    parser.add_argument(
+        "--resume",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Resume from dataset-level checkpoint if available.",
+    )
+    parser.add_argument(
+        "--checkpoint-path",
+        default=None,
+        help="Optional explicit checkpoint JSON path. Default is derived from run signature.",
     )
     return parser.parse_args()
 
@@ -304,6 +317,214 @@ def _handle_warmup_failures(
     return failures
 
 
+def _metric_counts_from_payload(payload: dict[str, Any] | None) -> MetricCounts:
+    payload = payload or {}
+    return MetricCounts(
+        true_positives=int(payload.get("true_positives", 0) or 0),
+        false_positives=int(payload.get("false_positives", 0) or 0),
+        false_negatives=int(payload.get("false_negatives", 0) or 0),
+    )
+
+
+def _metric_payload_from_counts(counts: MetricCounts) -> dict[str, Any]:
+    return {
+        "true_positives": counts.true_positives,
+        "false_positives": counts.false_positives,
+        "false_negatives": counts.false_negatives,
+        "precision": round(counts.precision, 6),
+        "recall": round(counts.recall, 6),
+        "f1": round(counts.f1, 6),
+        "residual_miss_ratio": round(1.0 - counts.recall, 6),
+    }
+
+
+def _sum_metric_payloads(payloads: list[dict[str, Any]]) -> dict[str, Any]:
+    summed = MetricCounts(true_positives=0, false_positives=0, false_negatives=0)
+    for payload in payloads:
+        counts = _metric_counts_from_payload(payload)
+        summed = MetricCounts(
+            true_positives=summed.true_positives + counts.true_positives,
+            false_positives=summed.false_positives + counts.false_positives,
+            false_negatives=summed.false_negatives + counts.false_negatives,
+        )
+    return _metric_payload_from_counts(summed)
+
+
+def _aggregate_metrics_from_dataset_reports(dataset_reports: list[dict[str, Any]]) -> EvaluationAggregate:
+    def sum_top(metric_name: str) -> MetricCounts:
+        summed = MetricCounts(true_positives=0, false_positives=0, false_negatives=0)
+        for item in dataset_reports:
+            payload = item.get("metrics", {}).get(metric_name, {})
+            counts = _metric_counts_from_payload(payload)
+            summed = MetricCounts(
+                true_positives=summed.true_positives + counts.true_positives,
+                false_positives=summed.false_positives + counts.false_positives,
+                false_negatives=summed.false_negatives + counts.false_negatives,
+            )
+        return summed
+
+    def sum_label_map(metric_name: str) -> dict[str, MetricCounts]:
+        label_map: dict[str, MetricCounts] = {}
+        for item in dataset_reports:
+            labels_payload = item.get("metrics", {}).get(metric_name, {})
+            if not isinstance(labels_payload, dict):
+                continue
+            for label, payload in labels_payload.items():
+                counts = _metric_counts_from_payload(payload if isinstance(payload, dict) else {})
+                prev = label_map.get(label, MetricCounts(true_positives=0, false_positives=0, false_negatives=0))
+                label_map[label] = MetricCounts(
+                    true_positives=prev.true_positives + counts.true_positives,
+                    false_positives=prev.false_positives + counts.false_positives,
+                    false_negatives=prev.false_negatives + counts.false_negatives,
+                )
+        return label_map
+
+    return EvaluationAggregate(
+        exact_agnostic=sum_top("exact_agnostic"),
+        overlap_agnostic=sum_top("overlap_agnostic"),
+        exact_canonical=sum_top("exact_canonical"),
+        overlap_canonical=sum_top("overlap_canonical"),
+        char_canonical=sum_top("char_canonical"),
+        token_canonical=sum_top("token_canonical"),
+        per_label_exact=sum_label_map("per_label_exact"),
+        per_label_char=sum_label_map("per_label_char"),
+    )
+
+
+def _aggregate_detector_breakdown_from_reports(dataset_reports: list[dict[str, Any]]) -> dict[str, Any]:
+    aggregate: dict[str, dict[str, Any]] = {}
+    for report in dataset_reports:
+        breakdown = report.get("detector_breakdown", {})
+        if not isinstance(breakdown, dict):
+            continue
+        for detector_name, payload in breakdown.items():
+            if not isinstance(payload, dict):
+                continue
+            entry = aggregate.setdefault(
+                detector_name,
+                {
+                    "prediction_count": 0,
+                    "canonical_prediction_count": 0,
+                    "overlap_agnostic_counts": MetricCounts(true_positives=0, false_positives=0, false_negatives=0),
+                    "overlap_canonical_counts": MetricCounts(true_positives=0, false_positives=0, false_negatives=0),
+                },
+            )
+            entry["prediction_count"] += int(payload.get("prediction_count", 0) or 0)
+            entry["canonical_prediction_count"] += int(payload.get("canonical_prediction_count", 0) or 0)
+            for metric_name, key in (("overlap_agnostic", "overlap_agnostic_counts"), ("overlap_canonical", "overlap_canonical_counts")):
+                counts = _metric_counts_from_payload(payload.get(metric_name) if isinstance(payload.get(metric_name), dict) else {})
+                prev: MetricCounts = entry[key]
+                entry[key] = MetricCounts(
+                    true_positives=prev.true_positives + counts.true_positives,
+                    false_positives=prev.false_positives + counts.false_positives,
+                    false_negatives=prev.false_negatives + counts.false_negatives,
+                )
+
+    output: dict[str, Any] = {}
+    for detector_name, item in sorted(aggregate.items()):
+        output[detector_name] = {
+            "prediction_count": item["prediction_count"],
+            "canonical_prediction_count": item["canonical_prediction_count"],
+            "overlap_agnostic": _metric_payload_from_counts(item["overlap_agnostic_counts"]),
+            "overlap_canonical": _metric_payload_from_counts(item["overlap_canonical_counts"]),
+        }
+    return output
+
+
+def _aggregate_dataset_slices_from_reports(dataset_reports: list[dict[str, Any]]) -> dict[str, Any]:
+    bucketed: dict[str, dict[str, dict[str, Any]]] = {}
+    for report in dataset_reports:
+        dataset_slices = report.get("dataset_slices", {})
+        if not isinstance(dataset_slices, dict):
+            continue
+        for group_name, group_payload in dataset_slices.items():
+            if not isinstance(group_payload, dict):
+                continue
+            group_state = bucketed.setdefault(group_name, {})
+            for slice_name, slice_payload in group_payload.items():
+                if not isinstance(slice_payload, dict):
+                    continue
+                state = group_state.setdefault(
+                    slice_name,
+                    {
+                        "sample_count": 0,
+                        "exact_payloads": [],
+                        "overlap_payloads": [],
+                    },
+                )
+                state["sample_count"] += int(slice_payload.get("sample_count", 0) or 0)
+                if isinstance(slice_payload.get("exact_canonical"), dict):
+                    state["exact_payloads"].append(slice_payload["exact_canonical"])
+                if isinstance(slice_payload.get("overlap_canonical"), dict):
+                    state["overlap_payloads"].append(slice_payload["overlap_canonical"])
+
+    output: dict[str, Any] = {}
+    for group_name, slices in sorted(bucketed.items()):
+        output[group_name] = {}
+        for slice_name, state in sorted(slices.items()):
+            output[group_name][slice_name] = {
+                "sample_count": state["sample_count"],
+                "exact_canonical": _sum_metric_payloads(state["exact_payloads"]),
+                "overlap_canonical": _sum_metric_payloads(state["overlap_payloads"]),
+            }
+    return output
+
+
+def _collect_errors_preview(dataset_reports: list[dict[str, Any]], limit: int) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for report in dataset_reports:
+        errors = report.get("errors_preview", [])
+        if not isinstance(errors, list):
+            continue
+        for item in errors:
+            if isinstance(item, dict):
+                rows.append(item)
+            if len(rows) >= limit:
+                return rows
+    return rows
+
+
+def _run_signature(args: argparse.Namespace, *, policy_name: str, selected_datasets: list[str]) -> dict[str, Any]:
+    return {
+        "policy_path": str(Path(args.policy_path).resolve()),
+        "policy_name": policy_name,
+        "split": args.split,
+        "datasets": list(selected_datasets),
+        "mode": args.mode,
+        "strict_split": bool(args.strict_split),
+        "synthetic_test_size": float(args.synthetic_test_size),
+        "synthetic_split_seed": int(args.synthetic_split_seed),
+        "max_samples": args.max_samples,
+        "cascade_threshold": float(args.cascade_threshold),
+        "cascade_heavy_recognizers": sorted(_parse_csv(args.cascade_heavy_recognizers)),
+    }
+
+
+def _default_checkpoint_path(output_dir: str, signature: dict[str, Any]) -> Path:
+    raw = json.dumps(signature, ensure_ascii=False, sort_keys=True)
+    digest = hashlib.sha1(raw.encode("utf-8")).hexdigest()[:12]
+    checkpoint_dir = Path(output_dir) / "_checkpoints"
+    checkpoint_dir.mkdir(parents=True, exist_ok=True)
+    return checkpoint_dir / f"eval_checkpoint_{digest}.json"
+
+
+def _load_checkpoint(path: Path) -> dict[str, Any] | None:
+    if not path.exists():
+        return None
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _write_checkpoint(path: Path, *, signature: dict[str, Any], dataset_reports: list[dict[str, Any]]) -> None:
+    payload = {
+        "checkpoint_version": 1,
+        "updated_at_utc": datetime.now(tz=UTC).isoformat(),
+        "run_signature": signature,
+        "dataset_reports": dataset_reports,
+    }
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
 def _make_cascade_services(
     policy_config: Any,
     policy_name: str,
@@ -395,15 +616,38 @@ def main() -> int:
     warmup_failures = _handle_warmup_failures(warmup_statuses, strict=args.warmup_strict)
 
     overall_started = time.perf_counter()
+    signature = _run_signature(args, policy_name=policy_name, selected_datasets=selected_datasets)
+    checkpoint_path = Path(args.checkpoint_path) if args.checkpoint_path else _default_checkpoint_path(args.output_dir, signature)
 
     dataset_reports: list[dict[str, Any]] = []
-    all_samples: list[EvalSample] = []
-    all_predictions_by_id: dict[str, list[EvalSpan]] = {}
-    all_detector_predictions: defaultdict[str, dict[str, list[EvalSpan]]] = defaultdict(dict)
-    combined_errors_preview: list[dict[str, object]] = []
-    total_escalated = 0
+    if args.resume:
+        checkpoint = _load_checkpoint(checkpoint_path)
+        if checkpoint is not None:
+            checkpoint_signature = checkpoint.get("run_signature", {})
+            if checkpoint_signature != signature:
+                raise RuntimeError(
+                    f"Checkpoint signature mismatch for {checkpoint_path}. "
+                    "Use a different --checkpoint-path or disable --resume."
+                )
+            resumed_reports = checkpoint.get("dataset_reports", [])
+            if isinstance(resumed_reports, list):
+                dataset_reports = [item for item in resumed_reports if isinstance(item, dict)]
+                print(
+                    f"[progress] resume loaded checkpoint={checkpoint_path} completed_datasets={len(dataset_reports)}",
+                    flush=True,
+                )
+    completed_dataset_names = {str(item.get("name", "")) for item in dataset_reports}
+    total_escalated = sum(
+        int(item.get("cascade", {}).get("escalated_samples", 0) or 0)
+        for item in dataset_reports
+        if isinstance(item.get("cascade"), dict)
+    )
 
     for dataset_name in selected_datasets:
+        if dataset_name in completed_dataset_names:
+            print(f"[progress] dataset={dataset_name} already completed (checkpoint), skipping", flush=True)
+            continue
+
         adapter = get_dataset_adapter(dataset_name)
         split_to_use, available_splits = _resolve_dataset_split(
             dataset_name=dataset_name,
@@ -580,33 +824,14 @@ def main() -> int:
             total_escalated += dataset_escalated
 
         dataset_reports.append(dataset_report)
+        completed_dataset_names.add(dataset_name)
+        _write_checkpoint(checkpoint_path, signature=signature, dataset_reports=dataset_reports)
 
-        for sample in samples:
-            global_id = f"{dataset_name}::{sample.sample_id}"
-            all_samples.append(
-                EvalSample(
-                    sample_id=global_id,
-                    text=sample.text,
-                    gold_spans=sample.gold_spans,
-                    metadata={**sample.metadata, "dataset": dataset_name},
-                )
-            )
-            all_predictions_by_id[global_id] = predictions_by_id.get(sample.sample_id, [])
-
-        for detector_name, by_sample in detector_predictions.items():
-            for sample_id, spans in by_sample.items():
-                all_detector_predictions[detector_name][f"{dataset_name}::{sample_id}"] = spans
-
-        for item in errors_preview:
-            if len(combined_errors_preview) >= args.errors_preview_limit:
-                break
-            combined_errors_preview.append(item)
-
-    if not all_samples:
+    if not dataset_reports:
         raise RuntimeError("No samples were loaded for the requested datasets")
 
     elapsed_total = time.perf_counter() - overall_started
-    aggregate_total = evaluate_samples(all_samples, all_predictions_by_id)
+    aggregate_total = _aggregate_metrics_from_dataset_reports(dataset_reports)
 
     if len(dataset_reports) == 1:
         top_dataset_name = dataset_reports[0]["name"]
@@ -620,13 +845,13 @@ def main() -> int:
     report_payload = build_report_payload(
         dataset_name=top_dataset_name,
         split=top_split,
-        sample_count=len(all_samples),
+        sample_count=sum(int(item.get("sample_count", 0) or 0) for item in dataset_reports),
         policy_name=policy_name,
         policy_path=str(Path(args.policy_path).resolve()),
         runtime_mode=settings.runtime_mode,
         elapsed_seconds=elapsed_total,
         aggregate=aggregate_total,
-        errors_preview=combined_errors_preview,
+        errors_preview=_collect_errors_preview(dataset_reports, args.errors_preview_limit),
     )
     report_payload["evaluation"]["mode"] = args.mode
     report_payload["evaluation"]["warmup"] = {
@@ -636,8 +861,8 @@ def main() -> int:
         "recognizers": warmup_statuses,
     }
     report_payload["datasets"] = dataset_reports
-    report_payload["detector_breakdown"] = _detector_breakdown(all_samples, dict(all_detector_predictions))
-    report_payload["dataset_slices"] = _slice_metrics(all_samples, all_predictions_by_id)
+    report_payload["detector_breakdown"] = _aggregate_detector_breakdown_from_reports(dataset_reports)
+    report_payload["dataset_slices"] = _aggregate_dataset_slices_from_reports(dataset_reports)
 
     if args.mode == "cascade":
         report_payload["evaluation"]["cascade"] = {
@@ -646,7 +871,11 @@ def main() -> int:
             "stage_b_profile": stage_b_profile,
             "heavy_recognizers": sorted(heavy_recognizers),
             "escalated_samples": total_escalated,
-            "escalated_ratio": round(total_escalated / max(1, len(all_samples)), 6),
+            "escalated_ratio": round(
+                total_escalated
+                / max(1, sum(int(item.get("sample_count", 0) or 0) for item in dataset_reports)),
+                6,
+            ),
         }
 
     timestamp = datetime.now(tz=UTC).strftime("%Y%m%dT%H%M%SZ")
@@ -655,11 +884,13 @@ def main() -> int:
 
     print(f"[progress] all-datasets complete elapsed={_format_duration(elapsed_total)}", flush=True)
     print(f"[ok] Datasets: {', '.join(selected_datasets)}")
-    print(f"[ok] Samples (combined): {len(all_samples)}")
+    combined_samples = sum(int(item.get("sample_count", 0) or 0) for item in dataset_reports)
+    print(f"[ok] Samples (combined): {combined_samples}")
     print(f"[ok] Policy: {policy_name}")
     print(f"[ok] Mode: {args.mode}")
+    print(f"[ok] Checkpoint: {checkpoint_path}")
     if args.mode == "cascade":
-        print(f"[ok] Cascade escalated: {total_escalated}/{len(all_samples)}")
+        print(f"[ok] Cascade escalated: {total_escalated}/{combined_samples}")
     print(f"[ok] JSON report: {json_path}")
     print(f"[ok] Markdown report: {md_path}")
     return 0

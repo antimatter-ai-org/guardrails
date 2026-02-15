@@ -64,7 +64,6 @@ Pattern labels:
 - `US_SSN`
 - `IBAN_CODE`
 - `SWIFT_CODE`
-- `PHONE_NUMBER`
 
 Examples:
 - `SSN: 123-45-6789` -> `US_SSN`
@@ -184,3 +183,34 @@ Normalized entity labels produced by recognizer:
 Examples:
 - `Контакт: ivan@example.com` -> `EMAIL_ADDRESS`
 - `Телефон +7 999 123 45 67` -> `PHONE_NUMBER`
+
+## Recognizer: `hf_token_classifier` (optional policy recognizer type)
+
+Type: `hf_token_classifier`
+
+Source:
+- Hugging Face `transformers` token-classification pipeline.
+- Model path can be Hugging Face repo id or local path from `GR_MODEL_DIR/hf_token_classifier/...`.
+
+Primary configuration keys:
+- `model_name`
+- `label_mapping`
+- `entities`
+- `score_threshold`
+- `aggregation_strategy`
+
+Runtime behavior:
+- Uses local in-process runtime path.
+- `GR_RUNTIME_MODE=cpu` and `GR_RUNTIME_MODE=cuda` both run this recognizer locally (not via PyTriton yet).
+- Tries MPS on Apple Silicon when available, otherwise CPU.
+- Inference has built-in timeout and returns empty results on timeout/failure (graceful degradation).
+
+Concrete labels:
+- Produced labels are normalized Presidio entity types after `label_mapping`.
+- Typical mappings:
+  - `PER`/`PERSON` -> `PERSON`
+  - `ORG`/`ORGANIZATION` -> `ORGANIZATION`
+  - `LOC`/`LOCATION` -> `LOCATION`
+
+Example:
+- Model output `entity_group=PER`, mapped as `PERSON` -> `PERSON`
