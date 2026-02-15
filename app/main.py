@@ -46,7 +46,13 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="Guardrails Service", version="0.4.0")
+app = FastAPI(
+    title="Guardrails Service",
+    version="0.4.0",
+    openapi_url="/openapi.json",
+    docs_url="/docs",
+    redoc_url="/redoc",
+)
 
 _SUPPORTED_SOURCES = ["INPUT", "OUTPUT", "TOOL_INPUT", "TOOL_OUTPUT", "RETRIEVAL"]
 _SUPPORTED_ACTIONS = ["NONE", "MASKED", "BLOCKED", "FLAGGED"]
@@ -237,6 +243,11 @@ async def capabilities_endpoint() -> CapabilitiesResponse:
         checks=sorted(config.recognizer_definitions.keys()),
         runtime_mode=settings.runtime_mode,
     )
+
+
+@app.get("/v1/guardrails/openapi.json", include_in_schema=False)
+async def openapi_alias_endpoint() -> dict[str, Any]:
+    return app.openapi()
 
 
 @app.post("/v1/guardrails/apply", response_model=ApplyResponse)

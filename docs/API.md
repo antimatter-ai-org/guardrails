@@ -16,6 +16,14 @@ The API is stage-based and transform-aware:
 
 ## Endpoints
 
+### `GET /openapi.json`
+
+Auto-generated OpenAPI 3.1 JSON spec (FastAPI native endpoint).
+
+### `GET /v1/guardrails/openapi.json`
+
+Alias endpoint returning the same OpenAPI JSON spec under guardrails namespace.
+
 ### `GET /healthz`
 
 Liveness probe.
@@ -288,6 +296,41 @@ curl -sS -X POST http://localhost:8080/v1/guardrails/sessions/sess_abc123/finali
 3. Emit `output_chunk` to client as it arrives.
 4. When stream ends, send chunk with `final=true`.
 5. Call `sessions/{id}/finalize`.
+
+## Generating API Clients
+
+Download spec:
+
+```bash
+curl -sS http://localhost:8080/openapi.json > openapi.json
+```
+
+Generate TypeScript client (openapi-generator):
+
+```bash
+openapi-generator-cli generate \
+  -i openapi.json \
+  -g typescript-fetch \
+  -o ./clients/typescript
+```
+
+Generate Go client:
+
+```bash
+openapi-generator-cli generate \
+  -i openapi.json \
+  -g go \
+  -o ./clients/go
+```
+
+Generate Java client:
+
+```bash
+openapi-generator-cli generate \
+  -i openapi.json \
+  -g java \
+  -o ./clients/java
+```
 
 ## Failure and Edge Cases
 

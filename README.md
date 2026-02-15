@@ -21,6 +21,8 @@ This service does not route LLM traffic itself. It exposes a unified guardrails 
 
 - `GET /healthz`
 - `GET /readyz`
+- `GET /openapi.json`
+- `GET /v1/guardrails/openapi.json` (alias)
 - `POST /admin/reload`
 - `GET /v1/guardrails/capabilities`
 - `POST /v1/guardrails/apply`
@@ -29,6 +31,12 @@ This service does not route LLM traffic itself. It exposes a unified guardrails 
 
 Detailed contract and examples:
 - `/Users/oleg/Projects/_antimatter/guardrails/docs/API.md`
+
+Fetch OpenAPI spec for client generation:
+
+```bash
+curl -sS http://localhost:8080/openapi.json > openapi.json
+```
 
 ## Typical Router Flow
 
