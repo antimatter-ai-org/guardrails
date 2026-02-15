@@ -1,4 +1,4 @@
-.PHONY: sync deps-up deps-down dev-up dev-down run-api run-pytriton test-unit test-integration test-all download-models check-models eval-scanpatch eval-scanpatch-baseline eval-scanpatch-cascade finetune-prepare-scanpatch finetune-scanpatch-pipeline eval-finetuned-gliner
+.PHONY: sync deps-up deps-down dev-up dev-down run-api run-pytriton test-unit test-integration test-all download-models check-models eval-all eval-scanpatch eval-scanpatch-baseline eval-scanpatch-cascade finetune-prepare-scanpatch finetune-scanpatch-pipeline eval-finetuned-gliner
 
 MODELS_DIR ?= ./.models
 POLICY_PATH ?= ./configs/policy.yaml
@@ -43,6 +43,9 @@ test-integration: deps-up
 	uv run --extra dev env GUARDRAILS_BASE_URL=http://127.0.0.1:8080 pytest tests/integration -q
 
 test-all: test-unit test-integration
+
+eval-all:
+	uv run --extra eval python -m app.eval.run --split test --policy-path $(POLICY_PATH) --policy-name external_default --env-file $(EVAL_ENV_FILE) --output-dir $(EVAL_OUTPUT_DIR)
 
 eval-scanpatch:
 	uv run --extra eval python -m app.eval.run --dataset scanpatch/pii-ner-corpus-synthetic-controlled --split test --policy-path $(POLICY_PATH) --policy-name external_default --mode baseline --env-file $(EVAL_ENV_FILE) --output-dir $(EVAL_OUTPUT_DIR)

@@ -148,6 +148,7 @@ class ScanpatchSyntheticControlledAdapter(DatasetAdapter):
                         metadata={
                             "source": row.get("source"),
                             "noisy": row.get("noisy"),
+                            "__split__": split,
                         },
                     )
                 )
@@ -176,6 +177,7 @@ class ScanpatchSyntheticControlledAdapter(DatasetAdapter):
                         metadata={
                             "source": row.get("source"),
                             "noisy": row.get("noisy"),
+                            "__split__": split,
                         },
                     )
                 )
@@ -200,6 +202,7 @@ class ScanpatchSyntheticControlledAdapter(DatasetAdapter):
                         metadata={
                             "source": row.get("source"),
                             "noisy": row.get("noisy"),
+                            "__split__": split,
                         },
                     )
                 )

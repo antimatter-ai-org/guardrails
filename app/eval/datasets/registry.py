@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 from app.eval.datasets.base import DatasetAdapter
+from app.eval.datasets.rubai import RubaiNerPersonalAdapter
 from app.eval.datasets.scanpatch import ScanpatchSyntheticControlledAdapter
 
 _ADAPTERS: dict[str, type[DatasetAdapter]] = {
+    "BoburAmirov/rubai-NER-150K-Personal": RubaiNerPersonalAdapter,
     "scanpatch/pii-ner-corpus-synthetic-controlled": ScanpatchSyntheticControlledAdapter,
 }
 
@@ -14,3 +16,7 @@ def get_dataset_adapter(dataset_name: str) -> DatasetAdapter:
         supported = ", ".join(sorted(_ADAPTERS))
         raise ValueError(f"Unsupported dataset '{dataset_name}'. Supported datasets: {supported}")
     return adapter_cls()
+
+
+def list_supported_datasets() -> list[str]:
+    return sorted(_ADAPTERS.keys())

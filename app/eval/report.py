@@ -20,6 +20,19 @@ def _metric_dict(metric: MetricCounts) -> dict[str, Any]:
     }
 
 
+def metrics_payload(aggregate: EvaluationAggregate) -> dict[str, Any]:
+    return {
+        "exact_agnostic": _metric_dict(aggregate.exact_agnostic),
+        "overlap_agnostic": _metric_dict(aggregate.overlap_agnostic),
+        "exact_canonical": _metric_dict(aggregate.exact_canonical),
+        "overlap_canonical": _metric_dict(aggregate.overlap_canonical),
+        "per_label_exact": {
+            label: _metric_dict(metric)
+            for label, metric in sorted(aggregate.per_label_exact.items())
+        },
+    }
+
+
 def build_report_payload(
     *,
     dataset_name: str,
@@ -37,7 +50,7 @@ def build_report_payload(
         samples_per_second = sample_count / elapsed_seconds
 
     return {
-        "report_version": "1.0",
+        "report_version": "2.0",
         "generated_at_utc": datetime.now(tz=UTC).isoformat(),
         "dataset": {
             "name": dataset_name,
@@ -51,23 +64,14 @@ def build_report_payload(
             "elapsed_seconds": round(elapsed_seconds, 6),
             "samples_per_second": round(samples_per_second, 6),
         },
-        "metrics": {
-            "exact_agnostic": _metric_dict(aggregate.exact_agnostic),
-            "overlap_agnostic": _metric_dict(aggregate.overlap_agnostic),
-            "exact_canonical": _metric_dict(aggregate.exact_canonical),
-            "overlap_canonical": _metric_dict(aggregate.overlap_canonical),
-            "per_label_exact": {
-                label: _metric_dict(metric)
-                for label, metric in sorted(aggregate.per_label_exact.items())
-            },
-        },
+        "metrics": metrics_payload(aggregate),
         "errors_preview": errors_preview,
     }
 
 
 def render_markdown_summary(report: dict[str, Any]) -> str:
     lines = [
-        f"# Guardrails Evaluation Report",
+        "# Guardrails Evaluation Report",
         "",
         f"- Dataset: `{report['dataset']['name']}` (`{report['dataset']['split']}`)",
         f"- Samples: `{report['dataset']['sample_count']}`",
@@ -77,7 +81,7 @@ def render_markdown_summary(report: dict[str, Any]) -> str:
         f"- Elapsed: `{report['evaluation']['elapsed_seconds']}s`",
         f"- Throughput: `{report['evaluation']['samples_per_second']}` samples/s",
         "",
-        "## Aggregate Metrics",
+        "## Combined Metrics",
         "",
     ]
 
@@ -94,7 +98,7 @@ def render_markdown_summary(report: dict[str, Any]) -> str:
         )
 
     lines.append("")
-    lines.append("## Per-Label (Exact Canonical)")
+    lines.append("## Combined Per-Label (Exact Canonical)")
     lines.append("")
     for label, metric in report["metrics"]["per_label_exact"].items():
         lines.append(
@@ -105,17 +109,33 @@ def render_markdown_summary(report: dict[str, Any]) -> str:
             )
         )
 
+    dataset_reports = report.get("datasets", [])
+    if isinstance(dataset_reports, list) and dataset_reports:
+        lines.append("")
+        lines.append("## By Dataset")
+        lines.append("")
+        for item in dataset_reports:
+            lines.append(f"### `{item['name']}` (`{item['split']}`)")
+            lines.append("")
+            lines.append(f"- Samples: `{item['sample_count']}`")
+            lines.append(f"- Elapsed: `{item['elapsed_seconds']}s`")
+            lines.append(f"- Throughput: `{item['samples_per_second']}` samples/s")
+            metric = item["metrics"]["exact_canonical"]
+            lines.append(
+                f"- exact_canonical: P={metric['precision']:.4f}, R={metric['recall']:.4f}, F1={metric['f1']:.4f}"
+            )
+            metric = item["metrics"]["overlap_canonical"]
+            lines.append(
+                f"- overlap_canonical: P={metric['precision']:.4f}, R={metric['recall']:.4f}, F1={metric['f1']:.4f}"
+            )
+            lines.append("")
+
     cascade = report.get("evaluation", {}).get("cascade")
     if isinstance(cascade, dict):
-        lines.append("")
         lines.append("## Cascade")
         lines.append("")
-        lines.append(
-            f"- Threshold: `{cascade.get('threshold')}`"
-        )
-        lines.append(
-            f"- Escalated: `{cascade.get('escalated_samples')}` / `{report['dataset']['sample_count']}`"
-        )
+        lines.append(f"- Threshold: `{cascade.get('threshold')}`")
+        lines.append(f"- Escalated: `{cascade.get('escalated_samples')}` / `{report['dataset']['sample_count']}`")
 
     return "\n".join(lines) + "\n"
 

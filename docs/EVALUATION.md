@@ -17,6 +17,12 @@ This repository includes a manual evaluation framework to benchmark guardrails r
 - Baseline shortcut: `make eval-scanpatch-baseline`
 - Cascade shortcut: `make eval-scanpatch-cascade`
 
+Dataset selection:
+- `--dataset` omitted: run on all supported datasets.
+- `--dataset <name>`: run on a specific dataset (repeatable option).
+- Progress is printed during execution (`[progress] ...`) with processed count, throughput, and ETA.
+- Progress cadence is configurable via `--progress-every-samples` and `--progress-every-seconds`.
+
 Default evaluator mode is `baseline`:
 - All configured recognizers from the selected analyzer profile run on every sample.
 
@@ -58,6 +64,7 @@ Each run emits:
 
 - JSON: machine-readable report
 - Markdown: human summary
+- includes both combined metrics and per-dataset metric sections when multiple datasets are evaluated.
 
 Top-level JSON fields:
 - `report_version`

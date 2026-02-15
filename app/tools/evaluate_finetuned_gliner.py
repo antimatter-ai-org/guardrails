@@ -43,6 +43,9 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--env-file", default=".env.eval")
     parser.add_argument("--hf-token-env", default="HF_TOKEN")
     parser.add_argument("--max-samples-per-split", type=int, default=None)
+    parser.add_argument("--no-progress", action="store_true", help="Disable periodic progress output.")
+    parser.add_argument("--progress-every-batches", type=int, default=25)
+    parser.add_argument("--progress-every-seconds", type=float, default=15.0)
     return parser.parse_args()
 
 
@@ -79,6 +82,9 @@ def main() -> int:
         device=args.device,
         include_overlap=not args.skip_overlap_metrics,
         include_per_label=not args.skip_per_label_metrics,
+        show_progress=not args.no_progress,
+        progress_every_batches=args.progress_every_batches,
+        progress_every_seconds=args.progress_every_seconds,
     )
 
     stamp = datetime.now(tz=UTC).strftime("%Y%m%dT%H%M%SZ")

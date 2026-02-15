@@ -94,3 +94,24 @@ def canonicalize_scanpatch_gold_label(label: str) -> str | None:
     }:
         return "identifier"
     return None
+
+
+def canonicalize_rubai_gold_label(label: str) -> str | None:
+    normalized = label.strip().lower()
+    if normalized in {"text", "o", ""}:
+        return None
+    if normalized in {"name", "first_name", "last_name", "full_name"}:
+        return "person"
+    if normalized in {"phone", "phone_number", "mobile_phone"}:
+        return "phone"
+    if normalized in {"address", "location", "city", "district", "street", "postal_code"}:
+        return "location"
+    if normalized in {"date", "datetime"}:
+        return "date"
+    if normalized in {"card_number", "credit_card", "payment_card", "card"}:
+        return "payment_card"
+    if normalized in {"document_id", "document_number", "passport", "tin", "snils", "id"}:
+        return "identifier"
+    if normalized in {"email"}:
+        return "email"
+    return None

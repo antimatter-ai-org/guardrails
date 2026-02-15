@@ -81,6 +81,22 @@ Run first dataset evaluation:
 make eval-scanpatch
 ```
 
+Run all available datasets (default behavior when `--dataset` is omitted):
+
+```bash
+uv run --extra eval python -m app.eval.run --split test --policy-path configs/policy.yaml --policy-name external_default --env-file .env.eval --output-dir reports/evaluations
+```
+
+Progress/ETA is printed during evaluation (`[progress] ...`). Tune cadence with:
+- `--progress-every-samples`
+- `--progress-every-seconds`
+
+Run a specific dataset only:
+
+```bash
+uv run --extra eval python -m app.eval.run --dataset scanpatch/pii-ner-corpus-synthetic-controlled --split test
+```
+
 Run cascade mode for throughput/quality tradeoff:
 
 ```bash

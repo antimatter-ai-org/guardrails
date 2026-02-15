@@ -420,6 +420,9 @@ def evaluate_model_on_eval_samples(
     device: str = "auto",
     include_overlap: bool = True,
     include_per_label: bool = True,
+    show_progress: bool = True,
+    progress_every_batches: int = 25,
+    progress_every_seconds: float = 15.0,
 ) -> ModelEvalResult:
     try:
         from gliner import GLiNER
@@ -436,8 +439,12 @@ def evaluate_model_on_eval_samples(
 
     started = datetime.now(tz=UTC)
     predictions_by_id: dict[str, list[EvalSpan]] = {}
+    started_perf = datetime.now(tz=UTC).timestamp()
+    total_batches = max(1, (len(samples) + batch_size - 1) // batch_size)
+    last_progress_batch = 0
+    last_progress_time = started_perf
 
-    for offset in range(0, len(samples), batch_size):
+    for batch_idx, offset in enumerate(range(0, len(samples), batch_size), start=1):
         batch_samples = samples[offset : offset + batch_size]
         batch_texts = [sample.text for sample in batch_samples]
         raw_preds = model.inference(
@@ -460,6 +467,31 @@ def evaluate_model_on_eval_samples(
                 for item in sample_preds
             ]
             predictions_by_id[sample.sample_id] = predicted_spans
+
+        if show_progress:
+            now = datetime.now(tz=UTC).timestamp()
+            should_report = (
+                batch_idx == 1
+                or batch_idx == total_batches
+                or (batch_idx - last_progress_batch) >= max(1, progress_every_batches)
+                or (now - last_progress_time) >= max(0.1, progress_every_seconds)
+            )
+            if should_report:
+                elapsed = max(0.0, now - started_perf)
+                rate = (batch_idx / elapsed) if elapsed > 0 else 0.0
+                remaining = max(0, total_batches - batch_idx)
+                eta_seconds = (remaining / rate) if rate > 0 else 0.0
+                print(
+                    (
+                        f"[progress] gliner-eval batches={batch_idx}/{total_batches} "
+                        f"({(batch_idx / total_batches) * 100:.2f}%) "
+                        f"samples={min(len(samples), batch_idx * batch_size)}/{len(samples)} "
+                        f"rate={rate:.2f} batches/s eta={eta_seconds:.1f}s"
+                    ),
+                    flush=True,
+                )
+                last_progress_batch = batch_idx
+                last_progress_time = now
 
     aggregate = evaluate_samples(
         samples,

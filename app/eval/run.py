@@ -10,19 +10,27 @@ from typing import Any
 
 from app.config import load_policy_config
 from app.core.analysis.service import PresidioAnalysisService
-from app.eval.datasets.registry import get_dataset_adapter
+from app.eval.datasets.registry import get_dataset_adapter, list_supported_datasets
 from app.eval.env import load_env_file
 from app.eval.labels import canonicalize_prediction_label
 from app.eval.metrics import evaluate_samples, match_counts
 from app.eval.predictor import merge_cascade_detections, sample_uncertainty_score
-from app.eval.report import build_report_payload, write_report_files
-from app.eval.types import EvalSpan
+from app.eval.report import build_report_payload, metrics_payload, write_report_files
+from app.eval.types import EvalSample, EvalSpan
 from app.model_assets import apply_model_env
 
 
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run manual guardrails evaluation on public datasets.")
-    parser.add_argument("--dataset", default="scanpatch/pii-ner-corpus-synthetic-controlled")
+    parser.add_argument(
+        "--dataset",
+        action="append",
+        default=None,
+        help=(
+            "Dataset name (repeatable). If omitted, all supported datasets are evaluated "
+            f"({', '.join(list_supported_datasets())})."
+        ),
+    )
     parser.add_argument("--split", default="test")
     parser.add_argument("--policy-path", default="configs/policy.yaml")
     parser.add_argument("--policy-name", default=None)
@@ -32,6 +40,18 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--hf-token-env", default="HF_TOKEN")
     parser.add_argument("--max-samples", type=int, default=None)
     parser.add_argument("--errors-preview-limit", type=int, default=25)
+    parser.add_argument(
+        "--progress-every-samples",
+        type=int,
+        default=1000,
+        help="Emit progress every N processed samples per dataset.",
+    )
+    parser.add_argument(
+        "--progress-every-seconds",
+        type=float,
+        default=15.0,
+        help="Emit progress every N seconds per dataset.",
+    )
     parser.add_argument("--mode", choices=("baseline", "cascade"), default="baseline")
     parser.add_argument("--cascade-threshold", type=float, default=0.15)
     parser.add_argument(
@@ -60,15 +80,16 @@ def _dataset_slug(name: str) -> str:
     return "".join(safe).strip("_")
 
 
-def _metric_dict(metric: Any) -> dict[str, float | int]:
-    return {
-        "true_positives": int(metric.true_positives),
-        "false_positives": int(metric.false_positives),
-        "false_negatives": int(metric.false_negatives),
-        "precision": round(float(metric.precision), 6),
-        "recall": round(float(metric.recall), 6),
-        "f1": round(float(metric.f1), 6),
-    }
+def _format_duration(seconds: float) -> str:
+    if seconds < 0:
+        seconds = 0.0
+    total = int(seconds)
+    hours = total // 3600
+    minutes = (total % 3600) // 60
+    secs = total % 60
+    if hours > 0:
+        return f"{hours:02d}:{minutes:02d}:{secs:02d}"
+    return f"{minutes:02d}:{secs:02d}"
 
 
 def _parse_csv(value: str) -> list[str]:
@@ -76,11 +97,11 @@ def _parse_csv(value: str) -> list[str]:
 
 
 def _slice_metrics(
-    samples: list[Any],
+    samples: list[EvalSample],
     predictions_by_id: dict[str, list[EvalSpan]],
 ) -> dict[str, Any]:
-    by_source: defaultdict[str, list[Any]] = defaultdict(list)
-    by_noisy: defaultdict[str, list[Any]] = defaultdict(list)
+    by_source: defaultdict[str, list[EvalSample]] = defaultdict(list)
+    by_noisy: defaultdict[str, list[EvalSample]] = defaultdict(list)
 
     for sample in samples:
         source = str(sample.metadata.get("source") or "unknown")
@@ -92,14 +113,14 @@ def _slice_metrics(
             noisy_key = "unknown"
         by_noisy[noisy_key].append(sample)
 
-    def evaluate_groups(groups: dict[str, list[Any]]) -> dict[str, Any]:
+    def evaluate_groups(groups: dict[str, list[EvalSample]]) -> dict[str, Any]:
         payload: dict[str, Any] = {}
         for key, grouped_samples in sorted(groups.items()):
             aggregate = evaluate_samples(grouped_samples, predictions_by_id)
             payload[key] = {
                 "sample_count": len(grouped_samples),
-                "overlap_canonical": _metric_dict(aggregate.overlap_canonical),
-                "exact_canonical": _metric_dict(aggregate.exact_canonical),
+                "overlap_canonical": metrics_payload(aggregate)["overlap_canonical"],
+                "exact_canonical": metrics_payload(aggregate)["exact_canonical"],
             }
         return payload
 
@@ -110,7 +131,7 @@ def _slice_metrics(
 
 
 def _detector_breakdown(
-    samples: list[Any],
+    samples: list[EvalSample],
     detector_predictions: dict[str, dict[str, list[EvalSpan]]],
 ) -> dict[str, Any]:
     payload: dict[str, Any] = {}
@@ -123,8 +144,8 @@ def _detector_breakdown(
         payload[detector_name] = {
             "prediction_count": prediction_count,
             "canonical_prediction_count": canonical_prediction_count,
-            "overlap_agnostic": _metric_dict(aggregate.overlap_agnostic),
-            "overlap_canonical": _metric_dict(aggregate.overlap_canonical),
+            "overlap_agnostic": metrics_payload(aggregate)["overlap_agnostic"],
+            "overlap_canonical": metrics_payload(aggregate)["overlap_canonical"],
         }
     return payload
 
@@ -216,6 +237,7 @@ def main() -> int:
         os.environ.setdefault("HF_TOKEN", hf_token)
 
     from app.settings import settings
+
     apply_model_env(model_dir=settings.model_dir, offline_mode=settings.offline_mode)
 
     policy_config = load_policy_config(args.policy_path)
@@ -224,7 +246,9 @@ def main() -> int:
         raise KeyError(f"Policy '{policy_name}' not found in {args.policy_path}")
     policy = policy_config.policies[policy_name]
 
+    selected_datasets = args.dataset or list_supported_datasets()
     heavy_recognizers = set(_parse_csv(args.cascade_heavy_recognizers))
+
     if args.mode == "cascade":
         stage_a_service, stage_a_profile, stage_b_service, stage_b_profile = _make_cascade_services(
             policy_config=policy_config,
@@ -238,119 +262,238 @@ def main() -> int:
         baseline_service = PresidioAnalysisService(policy_config)
         _warm_up_profile(baseline_service, policy.analyzer_profile)
 
-    adapter = get_dataset_adapter(args.dataset)
-    samples = adapter.load_samples(
-        split=args.split,
-        cache_dir=args.cache_dir,
-        hf_token=hf_token,
-        max_samples=args.max_samples,
-    )
+    overall_started = time.perf_counter()
 
-    predictions_by_id: dict[str, list[EvalSpan]] = {}
-    detector_predictions: defaultdict[str, dict[str, list[EvalSpan]]] = defaultdict(dict)
-    errors_preview: list[dict[str, object]] = []
-    cascade_escalated = 0
+    dataset_reports: list[dict[str, Any]] = []
+    all_samples: list[EvalSample] = []
+    all_predictions_by_id: dict[str, list[EvalSpan]] = {}
+    all_detector_predictions: defaultdict[str, dict[str, list[EvalSpan]]] = defaultdict(dict)
+    combined_errors_preview: list[dict[str, object]] = []
+    total_escalated = 0
 
-    started = time.perf_counter()
-    for sample in samples:
-        if args.mode == "cascade":
-            _, stage_a_detections = stage_a_service.analyze_text(
-                text=sample.text,
-                profile_name=stage_a_profile,
-                policy_min_score=policy.min_score,
-                language_hint=None,
-            )
-            uncertainty = sample_uncertainty_score(
-                sample.text,
-                stage_a_detections=stage_a_detections,
-                min_score=policy.min_score,
-            )
+    for dataset_name in selected_datasets:
+        adapter = get_dataset_adapter(dataset_name)
+        samples = adapter.load_samples(
+            split=args.split,
+            cache_dir=args.cache_dir,
+            hf_token=hf_token,
+            max_samples=args.max_samples,
+        )
+        if not samples:
+            continue
 
-            if stage_b_service is not None and stage_b_profile is not None and uncertainty >= args.cascade_threshold:
-                cascade_escalated += 1
-                _, stage_b_detections = stage_b_service.analyze_text(
+        split_used = str(samples[0].metadata.get("__split__") or args.split)
+        print(
+            f"[progress] dataset={dataset_name} split={split_used} loaded_samples={len(samples)}",
+            flush=True,
+        )
+        predictions_by_id: dict[str, list[EvalSpan]] = {}
+        detector_predictions: defaultdict[str, dict[str, list[EvalSpan]]] = defaultdict(dict)
+        errors_preview: list[dict[str, object]] = []
+        dataset_escalated = 0
+
+        started = time.perf_counter()
+        last_progress_time = started
+        last_progress_count = 0
+        total_samples = len(samples)
+        for idx, sample in enumerate(samples, start=1):
+            if args.mode == "cascade":
+                _, stage_a_detections = stage_a_service.analyze_text(
                     text=sample.text,
-                    profile_name=stage_b_profile,
+                    profile_name=stage_a_profile,
                     policy_min_score=policy.min_score,
                     language_hint=None,
                 )
-                detections = merge_cascade_detections(stage_a_detections, stage_b_detections)
-            else:
-                detections = stage_a_detections
-        else:
-            _, detections = baseline_service.analyze_text(
-                text=sample.text,
-                profile_name=policy.analyzer_profile,
-                policy_min_score=policy.min_score,
-                language_hint=None,
-            )
-
-        predicted_spans = _as_eval_spans(detections)
-        predictions_by_id[sample.sample_id] = predicted_spans
-        for span in predicted_spans:
-            item_detector = span.detector or "unknown"
-            detector_predictions[item_detector].setdefault(sample.sample_id, []).append(span)
-
-        if len(errors_preview) < args.errors_preview_limit:
-            counts = match_counts(
-                gold_spans=sample.gold_spans,
-                predicted_spans=predicted_spans,
-                require_label=False,
-                allow_overlap=False,
-            )
-            if counts.false_positives > 0 or counts.false_negatives > 0:
-                errors_preview.append(
-                    {
-                        "sample_id": sample.sample_id,
-                        "text": sample.text[:500],
-                        "gold_spans": [
-                            {"start": span.start, "end": span.end, "label": span.label}
-                            for span in sample.gold_spans
-                        ],
-                        "predicted_spans": [
-                            {"start": span.start, "end": span.end, "label": span.label}
-                            for span in predicted_spans
-                        ],
-                    }
+                uncertainty = sample_uncertainty_score(
+                    sample.text,
+                    stage_a_detections=stage_a_detections,
+                    min_score=policy.min_score,
                 )
 
-    elapsed_seconds = time.perf_counter() - started
-    aggregate = evaluate_samples(samples, predictions_by_id)
+                if stage_b_service is not None and stage_b_profile is not None and uncertainty >= args.cascade_threshold:
+                    dataset_escalated += 1
+                    _, stage_b_detections = stage_b_service.analyze_text(
+                        text=sample.text,
+                        profile_name=stage_b_profile,
+                        policy_min_score=policy.min_score,
+                        language_hint=None,
+                    )
+                    detections = merge_cascade_detections(stage_a_detections, stage_b_detections)
+                else:
+                    detections = stage_a_detections
+            else:
+                _, detections = baseline_service.analyze_text(
+                    text=sample.text,
+                    profile_name=policy.analyzer_profile,
+                    policy_min_score=policy.min_score,
+                    language_hint=None,
+                )
+
+            predicted_spans = _as_eval_spans(detections)
+            predictions_by_id[sample.sample_id] = predicted_spans
+            for span in predicted_spans:
+                item_detector = span.detector or "unknown"
+                detector_predictions[item_detector].setdefault(sample.sample_id, []).append(span)
+
+            if len(errors_preview) < args.errors_preview_limit:
+                counts = match_counts(
+                    gold_spans=sample.gold_spans,
+                    predicted_spans=predicted_spans,
+                    require_label=False,
+                    allow_overlap=False,
+                )
+                if counts.false_positives > 0 or counts.false_negatives > 0:
+                    errors_preview.append(
+                        {
+                            "dataset": dataset_name,
+                            "sample_id": sample.sample_id,
+                            "text": sample.text[:500],
+                            "gold_spans": [
+                                {"start": span.start, "end": span.end, "label": span.label}
+                                for span in sample.gold_spans
+                            ],
+                            "predicted_spans": [
+                                {"start": span.start, "end": span.end, "label": span.label}
+                                for span in predicted_spans
+                            ],
+                        }
+                    )
+
+            now = time.perf_counter()
+            processed_since_last = idx - last_progress_count
+            should_print_progress = (
+                idx == total_samples
+                or idx == 1
+                or processed_since_last >= max(1, args.progress_every_samples)
+                or (now - last_progress_time) >= max(0.1, args.progress_every_seconds)
+            )
+            if should_print_progress:
+                elapsed = max(0.0, now - started)
+                rate = (idx / elapsed) if elapsed > 0 else 0.0
+                remaining = max(0, total_samples - idx)
+                eta_seconds = (remaining / rate) if rate > 0 else 0.0
+                cascade_suffix = ""
+                if args.mode == "cascade":
+                    cascade_suffix = f", escalated={dataset_escalated}"
+                print(
+                    (
+                        f"[progress] dataset={dataset_name} split={split_used} "
+                        f"{idx}/{total_samples} ({(idx / total_samples) * 100:.2f}%) "
+                        f"elapsed={_format_duration(elapsed)} "
+                        f"rate={rate:.2f} samples/s "
+                        f"eta={_format_duration(eta_seconds)}"
+                        f"{cascade_suffix}"
+                    ),
+                    flush=True,
+                )
+                last_progress_time = now
+                last_progress_count = idx
+
+        elapsed_seconds = time.perf_counter() - started
+        aggregate = evaluate_samples(samples, predictions_by_id)
+        print(
+            (
+                f"[progress] dataset={dataset_name} split={split_used} complete "
+                f"samples={len(samples)} elapsed={_format_duration(elapsed_seconds)} "
+                f"rate={(len(samples) / elapsed_seconds) if elapsed_seconds > 0 else 0.0:.2f} samples/s"
+            ),
+            flush=True,
+        )
+
+        dataset_report = {
+            "name": dataset_name,
+            "split": split_used,
+            "sample_count": len(samples),
+            "elapsed_seconds": round(elapsed_seconds, 6),
+            "samples_per_second": round((len(samples) / elapsed_seconds) if elapsed_seconds > 0 else 0.0, 6),
+            "metrics": metrics_payload(aggregate),
+            "detector_breakdown": _detector_breakdown(samples, dict(detector_predictions)),
+            "dataset_slices": _slice_metrics(samples, predictions_by_id),
+            "errors_preview": errors_preview,
+        }
+        if args.mode == "cascade":
+            dataset_report["cascade"] = {
+                "threshold": args.cascade_threshold,
+                "escalated_samples": dataset_escalated,
+                "escalated_ratio": round(dataset_escalated / max(1, len(samples)), 6),
+            }
+            total_escalated += dataset_escalated
+
+        dataset_reports.append(dataset_report)
+
+        for sample in samples:
+            global_id = f"{dataset_name}::{sample.sample_id}"
+            all_samples.append(
+                EvalSample(
+                    sample_id=global_id,
+                    text=sample.text,
+                    gold_spans=sample.gold_spans,
+                    metadata={**sample.metadata, "dataset": dataset_name},
+                )
+            )
+            all_predictions_by_id[global_id] = predictions_by_id.get(sample.sample_id, [])
+
+        for detector_name, by_sample in detector_predictions.items():
+            for sample_id, spans in by_sample.items():
+                all_detector_predictions[detector_name][f"{dataset_name}::{sample_id}"] = spans
+
+        for item in errors_preview:
+            if len(combined_errors_preview) >= args.errors_preview_limit:
+                break
+            combined_errors_preview.append(item)
+
+    if not all_samples:
+        raise RuntimeError("No samples were loaded for the requested datasets")
+
+    elapsed_total = time.perf_counter() - overall_started
+    aggregate_total = evaluate_samples(all_samples, all_predictions_by_id)
+
+    if len(dataset_reports) == 1:
+        top_dataset_name = dataset_reports[0]["name"]
+        top_split = dataset_reports[0]["split"]
+        report_slug_dataset = _dataset_slug(top_dataset_name)
+    else:
+        top_dataset_name = "all"
+        top_split = args.split
+        report_slug_dataset = "all_datasets"
 
     report_payload = build_report_payload(
-        dataset_name=args.dataset,
-        split=args.split,
-        sample_count=len(samples),
+        dataset_name=top_dataset_name,
+        split=top_split,
+        sample_count=len(all_samples),
         policy_name=policy_name,
         policy_path=str(Path(args.policy_path).resolve()),
         runtime_mode=settings.runtime_mode,
-        elapsed_seconds=elapsed_seconds,
-        aggregate=aggregate,
-        errors_preview=errors_preview,
+        elapsed_seconds=elapsed_total,
+        aggregate=aggregate_total,
+        errors_preview=combined_errors_preview,
     )
     report_payload["evaluation"]["mode"] = args.mode
+    report_payload["datasets"] = dataset_reports
+    report_payload["detector_breakdown"] = _detector_breakdown(all_samples, dict(all_detector_predictions))
+    report_payload["dataset_slices"] = _slice_metrics(all_samples, all_predictions_by_id)
+
     if args.mode == "cascade":
         report_payload["evaluation"]["cascade"] = {
             "threshold": args.cascade_threshold,
             "stage_a_profile": stage_a_profile,
             "stage_b_profile": stage_b_profile,
             "heavy_recognizers": sorted(heavy_recognizers),
-            "escalated_samples": cascade_escalated,
-            "escalated_ratio": round(cascade_escalated / max(1, len(samples)), 6),
+            "escalated_samples": total_escalated,
+            "escalated_ratio": round(total_escalated / max(1, len(all_samples)), 6),
         }
-    report_payload["detector_breakdown"] = _detector_breakdown(samples, dict(detector_predictions))
-    report_payload["dataset_slices"] = _slice_metrics(samples, predictions_by_id)
 
     timestamp = datetime.now(tz=UTC).strftime("%Y%m%dT%H%M%SZ")
-    report_slug = f"eval_{_dataset_slug(args.dataset)}_{args.split}_{args.mode}_{timestamp}"
+    report_slug = f"eval_{report_slug_dataset}_{top_split}_{args.mode}_{timestamp}"
     json_path, md_path = write_report_files(report_payload, output_dir=args.output_dir, report_slug=report_slug)
 
-    print(f"[ok] Dataset: {args.dataset} ({args.split})")
-    print(f"[ok] Samples: {len(samples)}")
+    print(f"[progress] all-datasets complete elapsed={_format_duration(elapsed_total)}", flush=True)
+    print(f"[ok] Datasets: {', '.join(selected_datasets)}")
+    print(f"[ok] Samples (combined): {len(all_samples)}")
     print(f"[ok] Policy: {policy_name}")
     print(f"[ok] Mode: {args.mode}")
     if args.mode == "cascade":
-        print(f"[ok] Cascade escalated: {cascade_escalated}/{len(samples)}")
+        print(f"[ok] Cascade escalated: {total_escalated}/{len(all_samples)}")
     print(f"[ok] JSON report: {json_path}")
     print(f"[ok] Markdown report: {md_path}")
     return 0
