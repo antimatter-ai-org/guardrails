@@ -68,4 +68,4 @@ def test_token_classifier_builder_respects_global_enable_knob(monkeypatch):
         params={"model_name": "scanpatch/pii-ner-nemotron", "labels": ["email"]},
     )
     monkeypatch.setattr(recognizers.settings, "enable_nemotron", False)
-    assert recognizers._build_token_classifier_recognizers("nemotron", definition, ["en"]) == []  # noqa: SLF001
+    assert recognizers._build_token_classifier_recognizers("nemotron", definition) == []  # noqa: SLF001

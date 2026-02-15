@@ -47,7 +47,7 @@ app = FastAPI(title="Guardrails Service", version="0.3.0")
 
 
 def _to_inputs(items) -> list[TextInput]:
-    return [TextInput(id=item.id, text=item.text, language_hint=item.language_hint) for item in items]
+    return [TextInput(id=item.id, text=item.text) for item in items]
 
 
 def _to_detection_items(detections) -> list[DetectionItem]:
@@ -62,7 +62,6 @@ def _to_detection_items(detections) -> list[DetectionItem]:
                 score=item.score,
                 detector=item.detector,
                 snippet=item.text,
-                language=str(metadata.get("language") or ""),
                 entity_type=(str(metadata.get("entity_type")) if metadata.get("entity_type") else None),
                 canonical_label=(
                     str(metadata.get("canonical_label")) if metadata.get("canonical_label") else None
@@ -147,7 +146,6 @@ async def detect_endpoint(request: DetectRequest) -> DetectResponse:
         items=[
             DetectResultItem(
                 id=item.id,
-                language=item.language,
                 detections=_to_detection_items(item.detections),
                 diagnostics=item.diagnostics,
             )
@@ -186,7 +184,6 @@ async def mask_endpoint(request: MaskRequest) -> MaskResponse:
             MaskResultItem(
                 id=item.id,
                 text=item.text,
-                language=item.language,
                 detections=_to_detection_items(item.detections),
                 diagnostics=item.diagnostics,
             )

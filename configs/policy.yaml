@@ -24,10 +24,6 @@ policies:
 
 analyzer_profiles:
   external_rich:
-    language:
-      default: ru
-      supported: ["ru", "en"]
-      detection: auto
     analysis:
       recognizers:
         - phone_number_lib
@@ -43,10 +39,6 @@ analyzer_profiles:
         - nemotron_pii_token_classifier
 
   strict_profile:
-    language:
-      default: ru
-      supported: ["ru", "en"]
-      detection: auto
     analysis:
       recognizers:
         - phone_number_lib
@@ -60,10 +52,6 @@ analyzer_profiles:
         - high_entropy_secret
 
   passthrough_profile:
-    language:
-      default: ru
-      supported: ["ru", "en"]
-      detection: hint_only
     analysis:
       recognizers: []
 
@@ -121,7 +109,6 @@ recognizer_definitions:
     type: regex
     enabled: true
     params:
-      languages: ["en"]
       patterns:
         - name: us_ssn
           label: US_SSN

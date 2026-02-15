@@ -8,7 +8,6 @@ import regex as re
 from presidio_analyzer import EntityRecognizer, RecognizerRegistry, RecognizerResult
 
 from app.config import PolicyConfig
-from app.core.analysis.language import resolve_language, resolve_languages
 from app.core.analysis.mapping import canonicalize_entity_type
 from app.core.analysis.recognizers import build_recognizer_registry
 from app.core.analysis.span_normalizer import normalize_detections
@@ -45,7 +44,6 @@ class PresidioAnalysisService:
             raise KeyError(f"analyzer profile not found: {profile_name}")
 
         return build_recognizer_registry(
-            supported_languages=profile.language.supported,
             recognizer_ids=profile.analysis.recognizers,
             recognizer_definitions=self._config.recognizer_definitions,
         )
@@ -66,7 +64,6 @@ class PresidioAnalysisService:
         self,
         profile_name: str,
         text: str,
-        language: str,
         *,
         deadline: float,
     ) -> tuple[list[RecognizerResult], dict[str, float], dict[str, int], dict[str, str], bool]:
@@ -81,8 +78,6 @@ class PresidioAnalysisService:
             if perf_counter() >= deadline:
                 timeout_exceeded = True
                 break
-            if recognizer.get_supported_language() != language:
-                continue
             entities = recognizer.get_supported_entities()
             recognizer_name = str(getattr(recognizer, "name", recognizer.__class__.__name__))
             started_at = perf_counter()
@@ -109,16 +104,6 @@ class PresidioAnalysisService:
             detector_errors,
             timeout_exceeded,
         )
-
-    @staticmethod
-    def _merge_float_map(target: dict[str, float], source: dict[str, float]) -> None:
-        for key, value in source.items():
-            target[key] = target.get(key, 0.0) + float(value)
-
-    @staticmethod
-    def _merge_int_map(target: dict[str, int], source: dict[str, int]) -> None:
-        for key, value in source.items():
-            target[key] = target.get(key, 0) + int(value)
 
     @staticmethod
     def _luhn_check(digits: str) -> bool:
@@ -198,15 +183,13 @@ class PresidioAnalysisService:
         text: str,
         profile_name: str,
         policy_min_score: float,
-        language_hint: str | None,
-    ) -> tuple[str, list[Detection]]:
-        language, detections, _ = self.analyze_text_with_diagnostics(
+    ) -> list[Detection]:
+        detections, _ = self.analyze_text_with_diagnostics(
             text=text,
             profile_name=profile_name,
             policy_min_score=policy_min_score,
-            language_hint=language_hint,
         )
-        return language, detections
+        return detections
 
     def analyze_text_with_diagnostics(
         self,
@@ -214,60 +197,25 @@ class PresidioAnalysisService:
         text: str,
         profile_name: str,
         policy_min_score: float,
-        language_hint: str | None,
-    ) -> tuple[str, list[Detection], AnalysisDiagnostics]:
+    ) -> tuple[list[Detection], AnalysisDiagnostics]:
         started_at = perf_counter()
         deadline = started_at + self._MAX_SAMPLE_ANALYSIS_SECONDS
-        profile = self._config.analyzer_profiles.get(profile_name)
-        if profile is None:
-            raise KeyError(f"analyzer profile not found: {profile_name}")
-
-        languages = self.resolve_languages(
-            text=text,
-            profile_name=profile_name,
-            language_hint=language_hint,
-        )
-        language = languages[0]
         detector_timing_ms: dict[str, float] = {}
         detector_span_counts: dict[str, int] = {}
         detector_errors: dict[str, str] = {}
         timeout_exceeded = False
         spans_truncated = False
 
-        results_with_language: list[tuple[str, RecognizerResult]] = []
-        for current_language in languages:
-            if perf_counter() >= deadline:
-                timeout_exceeded = True
-                break
-            (
-                results,
-                language_timing,
-                language_spans,
-                language_errors,
-                language_timeout_exceeded,
-            ) = self._analyze_with_registry(profile_name, text, current_language, deadline=deadline)
-            self._merge_float_map(detector_timing_ms, language_timing)
-            self._merge_int_map(detector_span_counts, language_spans)
-            detector_errors.update(language_errors)
-            timeout_exceeded = timeout_exceeded or language_timeout_exceeded
-            for result in results:
-                results_with_language.append((current_language, result))
-
-        deduped_results: list[tuple[str, RecognizerResult]] = []
-        dedup_index: dict[tuple[int, int, str], int] = {}
-        for current_language, result in results_with_language:
-            key = (int(result.start), int(result.end), result.entity_type.strip().upper())
-            existing_index = dedup_index.get(key)
-            if existing_index is None:
-                dedup_index[key] = len(deduped_results)
-                deduped_results.append((current_language, result))
-                continue
-            _, previous_result = deduped_results[existing_index]
-            if float(result.score) > float(previous_result.score):
-                deduped_results[existing_index] = (current_language, result)
+        (
+            results,
+            detector_timing_ms,
+            detector_span_counts,
+            detector_errors,
+            timeout_exceeded,
+        ) = self._analyze_with_registry(profile_name, text, deadline=deadline)
 
         detections: list[Detection] = []
-        for result_language, result in deduped_results:
+        for result in results:
             entity_type = result.entity_type.strip().upper()
             canonical = canonicalize_entity_type(entity_type)
             score = float(result.score)
@@ -281,7 +229,7 @@ class PresidioAnalysisService:
                 if not bool(card_signal.get("keep")):
                     continue
                 detector_name = str((result.recognition_metadata or {}).get("recognizer_name", ""))
-                if ":CREDIT_CARD:" in detector_name:
+                if ":CREDIT_CARD" in detector_name:
                     score *= float(card_signal.get("score_multiplier", 1.0))
                 score = min(1.0, score + float(card_signal.get("score_bonus", 0.0)))
 
@@ -291,8 +239,6 @@ class PresidioAnalysisService:
             metadata = dict(result.recognition_metadata or {})
             metadata["entity_type"] = entity_type
             metadata["canonical_label"] = canonical
-            metadata["language"] = result_language
-            metadata["analysis_languages"] = languages
             if card_signal is not None:
                 metadata["payment_card_signal"] = card_signal
 
@@ -333,42 +279,4 @@ class PresidioAnalysisService:
                 "max_spans_truncated": bool(spans_truncated),
             },
         )
-        return language, detections, diagnostics
-
-    def resolve_language(
-        self,
-        *,
-        text: str,
-        profile_name: str,
-        language_hint: str | None,
-    ) -> str:
-        profile = self._config.analyzer_profiles.get(profile_name)
-        if profile is None:
-            raise KeyError(f"analyzer profile not found: {profile_name}")
-        return resolve_language(
-            text=text,
-            language_hint=language_hint,
-            supported=profile.language.supported,
-            default_language=profile.language.default,
-            detection_mode=profile.language.detection,
-        )
-
-    def resolve_languages(
-        self,
-        *,
-        text: str,
-        profile_name: str,
-        language_hint: str | None,
-    ) -> list[str]:
-        profile = self._config.analyzer_profiles.get(profile_name)
-        if profile is None:
-            raise KeyError(f"analyzer profile not found: {profile_name}")
-        return resolve_languages(
-            text=text,
-            language_hint=language_hint,
-            supported=profile.language.supported,
-            default_language=profile.language.default,
-            detection_mode=profile.language.detection,
-            strategy="union",
-            union_min_share=0.2,
-        )
+        return detections, diagnostics

@@ -8,6 +8,7 @@ Manual evaluation framework for guardrails detection quality on public datasets.
 - Runs one dataset (`--dataset`) or all supported datasets (default)
 - Uses the same analysis service and policy logic as runtime guardrails
 - Produces unified JSON + Markdown reports
+- `script_profile` is an evaluation-only slice for reporting; runtime guardrails do not use script/language routing.
 
 ## Supported Dataset Behavior
 

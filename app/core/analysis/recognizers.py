@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import ipaddress
 import math
-from collections.abc import Iterable
 from typing import Any
 
 import regex as re
@@ -19,6 +18,7 @@ _FLAG_MAP: dict[str, int] = {
     "DOTALL": re.DOTALL,
     "UNICODE": re.UNICODE,
 }
+_PRESIDIO_COMPAT_LANGUAGE = "global"
 
 
 def _normalize_entity_type(label: str) -> str:
@@ -439,19 +439,9 @@ def _pattern_flags(pattern_def: dict[str, Any]) -> int:
     return flags_value
 
 
-def _iter_languages(params: dict[str, Any], default_supported: Iterable[str]) -> list[str]:
-    raw = params.get("languages")
-    if isinstance(raw, list) and raw:
-        langs = [str(item).strip().lower() for item in raw if str(item).strip()]
-        if langs:
-            return langs
-    return [str(item).strip().lower() for item in default_supported if str(item).strip()]
-
-
 def _build_regex_recognizers(
     recognizer_id: str,
     definition: RecognizerDefinition,
-    supported_languages: list[str],
 ) -> list[EntityRecognizer]:
     params = definition.params
     patterns = params.get("patterns", [])
@@ -474,25 +464,23 @@ def _build_regex_recognizers(
         if isinstance(raw_context, list):
             context_by_label.setdefault(label, [str(token) for token in raw_context])
 
-    for language in _iter_languages(params, supported_languages):
-        for label, label_patterns in by_label.items():
-            recognizers.append(
-                PatternRecognizer(
-                    supported_entity=label,
-                    name=f"{recognizer_id}:{label}:{language}",
-                    supported_language=language,
-                    patterns=label_patterns,
-                    context=context_by_label.get(label),
-                    global_regex_flags=flags_by_label.get(label, re.IGNORECASE | re.MULTILINE | re.DOTALL),
-                )
+    for label, label_patterns in by_label.items():
+        recognizers.append(
+            PatternRecognizer(
+                supported_entity=label,
+                name=f"{recognizer_id}:{label}",
+                supported_language=_PRESIDIO_COMPAT_LANGUAGE,
+                patterns=label_patterns,
+                context=context_by_label.get(label),
+                global_regex_flags=flags_by_label.get(label, re.IGNORECASE | re.MULTILINE | re.DOTALL),
             )
+        )
     return recognizers
 
 
 def _build_phone_recognizers(
     recognizer_id: str,
     definition: RecognizerDefinition,
-    supported_languages: list[str],
 ) -> list[EntityRecognizer]:
     params = definition.params
     regions = [str(item) for item in params.get("regions", ["RU", "UA", "US"])]
@@ -500,36 +488,32 @@ def _build_phone_recognizers(
     min_digits = int(params.get("min_digits", 10))
     return [
         PhoneNumberRecognizer(
-            name=f"{recognizer_id}:{lang}",
-            supported_language=lang,
+            name=recognizer_id,
+            supported_language=_PRESIDIO_COMPAT_LANGUAGE,
             score=score,
             regions=regions,
             min_digits=min_digits,
         )
-        for lang in _iter_languages(params, supported_languages)
     ]
 
 
 def _build_ip_recognizers(
     recognizer_id: str,
     definition: RecognizerDefinition,
-    supported_languages: list[str],
 ) -> list[EntityRecognizer]:
     score = float(definition.params.get("score", 0.99))
     return [
         IPAddressRecognizer(
-            name=f"{recognizer_id}:{lang}",
-            supported_language=lang,
+            name=recognizer_id,
+            supported_language=_PRESIDIO_COMPAT_LANGUAGE,
             score=score,
         )
-        for lang in _iter_languages(definition.params, supported_languages)
     ]
 
 
 def _build_gliner_recognizers(
     recognizer_id: str,
     definition: RecognizerDefinition,
-    supported_languages: list[str],
 ) -> list[EntityRecognizer]:
     params = definition.params
     labels = [str(item) for item in params.get("labels", [])]
@@ -541,22 +525,20 @@ def _build_gliner_recognizers(
     chunking = params.get("chunking", {})
     return [
         GlinerPresidioRecognizer(
-            name=f"{recognizer_id}:{lang}",
-            supported_language=lang,
+            name=recognizer_id,
+            supported_language=_PRESIDIO_COMPAT_LANGUAGE,
             model_name=model_name,
             labels=labels,
             threshold=threshold,
             triton_model_name=triton_model_name,
             chunking=chunking if isinstance(chunking, dict) else {},
         )
-        for lang in _iter_languages(params, supported_languages)
     ]
 
 
 def _build_token_classifier_recognizers(
     recognizer_id: str,
     definition: RecognizerDefinition,
-    supported_languages: list[str],
 ) -> list[EntityRecognizer]:
     if not settings.enable_nemotron:
         return []
@@ -574,8 +556,8 @@ def _build_token_classifier_recognizers(
     chunking = params.get("chunking", {})
     return [
         TokenClassifierPresidioRecognizer(
-            name=f"{recognizer_id}:{lang}",
-            supported_language=lang,
+            name=recognizer_id,
+            supported_language=_PRESIDIO_COMPAT_LANGUAGE,
             model_name=model_name,
             threshold=threshold,
             labels=labels,
@@ -586,45 +568,41 @@ def _build_token_classifier_recognizers(
             triton_model_name=triton_model_name,
             chunking=chunking if isinstance(chunking, dict) else {},
         )
-        for lang in _iter_languages(params, supported_languages)
     ]
 
 
 def _build_recognizers_for_definition(
     recognizer_id: str,
     definition: RecognizerDefinition,
-    supported_languages: list[str],
 ) -> list[EntityRecognizer]:
     rec_type = definition.type.lower()
     if rec_type in {"regex", "secret_regex"}:
-        return _build_regex_recognizers(recognizer_id, definition, supported_languages)
+        return _build_regex_recognizers(recognizer_id, definition)
     if rec_type == "phone":
-        return _build_phone_recognizers(recognizer_id, definition, supported_languages)
+        return _build_phone_recognizers(recognizer_id, definition)
     if rec_type == "ip":
-        return _build_ip_recognizers(recognizer_id, definition, supported_languages)
+        return _build_ip_recognizers(recognizer_id, definition)
     if rec_type == "gliner":
-        return _build_gliner_recognizers(recognizer_id, definition, supported_languages)
+        return _build_gliner_recognizers(recognizer_id, definition)
     if rec_type == "token_classifier":
-        return _build_token_classifier_recognizers(recognizer_id, definition, supported_languages)
+        return _build_token_classifier_recognizers(recognizer_id, definition)
     if rec_type == "entropy":
         params = definition.params
         return [
             EntropySecretRecognizer(
-                name=f"{recognizer_id}:{lang}",
-                supported_language=lang,
+                name=recognizer_id,
+                supported_language=_PRESIDIO_COMPAT_LANGUAGE,
                 min_length=int(params.get("min_length", 24)),
                 entropy_threshold=float(params.get("entropy_threshold", 3.7)),
                 score=float(params.get("score", 0.91)),
                 pattern=str(params.get("pattern", r"\b[A-Za-z0-9_\-/+=]{20,}\b")),
             )
-            for lang in _iter_languages(params, supported_languages)
         ]
     return []
 
 
 def build_recognizer_registry(
     *,
-    supported_languages: list[str],
     recognizer_ids: list[str],
     recognizer_definitions: dict[str, RecognizerDefinition],
 ) -> RecognizerRegistry:
@@ -633,6 +611,6 @@ def build_recognizer_registry(
         definition = recognizer_definitions.get(recognizer_id)
         if definition is None or not definition.enabled:
             continue
-        for recognizer in _build_recognizers_for_definition(recognizer_id, definition, supported_languages):
+        for recognizer in _build_recognizers_for_definition(recognizer_id, definition):
             registry.add_recognizer(recognizer)
     return registry

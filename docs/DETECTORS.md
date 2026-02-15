@@ -7,6 +7,10 @@ Maintenance rule:
 
 ## Output model
 
+Runtime execution model:
+- The detector pipeline is language-agnostic at runtime.
+- All configured recognizers run in a single pass per text (no language detection and no per-language routing).
+
 Each finding has:
 - `entity_type`: Presidio-style entity (for example `EMAIL_ADDRESS`, `PHONE_NUMBER`, `DOCUMENT_NUMBER`).
 - `label`: service label used for masking (currently canonical label uppercased, for example `EMAIL`, `PHONE`, `IDENTIFIER`, `SECRET`).

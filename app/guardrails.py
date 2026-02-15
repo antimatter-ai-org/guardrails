@@ -31,14 +31,12 @@ class GuardrailsNotFoundError(GuardrailsError):
 class TextInput:
     id: str
     text: str
-    language_hint: str | None = None
 
 
 @dataclass(slots=True)
 class ItemDetectionResult:
     id: str
     detections: list[Detection]
-    language: str
     diagnostics: dict[str, Any]
 
 
@@ -47,7 +45,6 @@ class ItemMaskResult:
     id: str
     text: str
     detections: list[Detection]
-    language: str
     diagnostics: dict[str, Any]
 
 
@@ -143,25 +140,22 @@ class GuardrailsService:
         text: str,
         profile_name: str,
         policy_min_score: float,
-        language_hint: str | None,
-    ) -> tuple[str, list[Detection], dict[str, Any]]:
+    ) -> tuple[list[Detection], dict[str, Any]]:
         analyzer = getattr(self._analysis_service, "analyze_text_with_diagnostics", None)
         if callable(analyzer):
-            language, detections, diagnostics = analyzer(
+            detections, diagnostics = analyzer(
                 text=text,
                 profile_name=profile_name,
                 policy_min_score=policy_min_score,
-                language_hint=language_hint,
             )
-            return language, detections, self._serialize_diagnostics(diagnostics)
+            return detections, self._serialize_diagnostics(diagnostics)
 
-        language, detections = self._analysis_service.analyze_text(
+        detections = self._analysis_service.analyze_text(
             text=text,
             profile_name=profile_name,
             policy_min_score=policy_min_score,
-            language_hint=language_hint,
         )
-        return language, detections, self._serialize_diagnostics(None)
+        return detections, self._serialize_diagnostics(None)
 
     async def detect_items(
         self,
@@ -173,11 +167,10 @@ class GuardrailsService:
         item_results: list[ItemDetectionResult] = []
         findings_count = 0
         for item in items:
-            language, detections, diagnostics = self._analyze_with_diagnostics(
+            detections, diagnostics = self._analyze_with_diagnostics(
                 text=item.text,
                 profile_name=policy.analyzer_profile,
                 policy_min_score=policy.min_score,
-                language_hint=item.language_hint,
             )
             detections = ReversibleMaskingEngine.resolve_overlaps(detections)
             findings_count += len(detections)
@@ -185,7 +178,6 @@ class GuardrailsService:
                 ItemDetectionResult(
                     id=item.id,
                     detections=detections,
-                    language=language,
                     diagnostics=diagnostics,
                 )
             )
@@ -230,11 +222,6 @@ class GuardrailsService:
                         id=item.id,
                         text=item.text,
                         detections=[],
-                        language=self._analysis_service.resolve_language(
-                            text=item.text,
-                            profile_name=policy.analyzer_profile,
-                            language_hint=item.language_hint,
-                        ),
                         diagnostics={},
                     )
                     for item in items
@@ -247,11 +234,10 @@ class GuardrailsService:
         request_hint = self._request_hint(request_id)
 
         for idx, item in enumerate(items):
-            language, detections, diagnostics = self._analyze_with_diagnostics(
+            detections, diagnostics = self._analyze_with_diagnostics(
                 text=item.text,
                 profile_name=policy.analyzer_profile,
                 policy_min_score=policy.min_score,
-                language_hint=item.language_hint,
             )
             prefix = f"{policy.placeholder_prefix}{idx:02d}{request_hint}"
             masker = ReversibleMaskingEngine(prefix)
@@ -262,7 +248,6 @@ class GuardrailsService:
                     id=item.id,
                     text=masked.text,
                     detections=masked.detections,
-                    language=language,
                     diagnostics=diagnostics,
                 )
             )

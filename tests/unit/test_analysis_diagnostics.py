@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from app.config import AnalysisConfig, AnalyzerProfile, LanguageConfig, PolicyConfig, PolicyDefinition, RecognizerDefinition
+from app.config import AnalysisConfig, AnalyzerProfile, PolicyConfig, PolicyDefinition, RecognizerDefinition
 from app.core.analysis.service import PresidioAnalysisService
 
 
@@ -18,7 +18,6 @@ def _make_service() -> PresidioAnalysisService:
         },
         analyzer_profiles={
             "profile": AnalyzerProfile(
-                language=LanguageConfig(default="en", supported=["en"], detection="hint_only"),
                 analysis=AnalysisConfig(recognizers=["bulk_regex"]),
             )
         },
@@ -46,14 +45,12 @@ def test_analysis_diagnostics_include_detector_stats_and_limits() -> None:
     service = _make_service()
     text = " ".join(f"X{idx}" for idx in range(400))
 
-    language, detections, diagnostics = service.analyze_text_with_diagnostics(
+    detections, diagnostics = service.analyze_text_with_diagnostics(
         text=text,
         profile_name="profile",
         policy_min_score=0.5,
-        language_hint="en",
     )
 
-    assert language == "en"
     assert len(detections) == service._MAX_SAMPLE_DETECTIONS  # noqa: SLF001
     assert diagnostics.limit_flags["max_spans_truncated"] is True
     assert diagnostics.detector_timing_ms
@@ -66,11 +63,10 @@ def test_analysis_timeout_flag_is_set_when_budget_is_exceeded() -> None:
     service = _make_service()
     service._MAX_SAMPLE_ANALYSIS_SECONDS = 0.0  # noqa: SLF001
 
-    _, _, diagnostics = service.analyze_text_with_diagnostics(
+    _, diagnostics = service.analyze_text_with_diagnostics(
         text="X1 X2 X3",
         profile_name="profile",
         policy_min_score=0.5,
-        language_hint="en",
     )
 
     assert diagnostics.limit_flags["analysis_timeout_exceeded"] is True

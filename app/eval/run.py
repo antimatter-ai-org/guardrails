@@ -10,13 +10,13 @@ from pathlib import Path
 from typing import Any
 
 from app.config import load_policy_config
-from app.core.analysis.language import classify_script_profile
 from app.core.analysis.service import PresidioAnalysisService
 from app.eval.datasets.registry import get_dataset_adapter, list_supported_datasets
 from app.eval.env import load_env_file
 from app.eval.labels import canonicalize_prediction_label
 from app.eval.metrics import EvaluationAggregate, evaluate_samples, match_counts
 from app.eval.report import build_report_payload, metrics_payload, write_report_files
+from app.eval.script_profile import classify_script_profile
 from app.eval.types import EvalSample, EvalSpan
 from app.model_assets import apply_model_env
 
@@ -275,11 +275,10 @@ def main() -> int:
         last_progress_time = time.perf_counter()
 
         for idx, sample in enumerate(dataset_samples, start=1):
-            _, detections = service.analyze_text(
+            detections = service.analyze_text(
                 text=sample.text,
                 profile_name=policy.analyzer_profile,
                 policy_min_score=policy.min_score,
-                language_hint=None,
             )
             spans = _as_eval_spans(detections)
             dataset_predictions[sample.sample_id] = spans

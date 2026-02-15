@@ -10,6 +10,7 @@ This project provides detection, reversible masking, and unmasking APIs. It does
 - Response unmasking for full and streaming outputs.
 - Redis-backed request/stream state.
 - RU/EN recognizer stack with GLiNER + Nemotron token-classifier + deterministic recognizers.
+- Language-agnostic runtime analysis (no language hints or language routing in API/runtime).
 - Project-level runtime switch:
   - `cpu`: local inference (auto-uses MPS on Apple Silicon when available)
   - `cuda`: all supported ML detectors run via PyTriton

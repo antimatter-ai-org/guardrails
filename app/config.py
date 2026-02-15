@@ -15,14 +15,6 @@ class RecognizerDefinition(BaseModel):
     params: dict[str, Any] = Field(default_factory=dict)
 
 
-class LanguageConfig(BaseModel):
-    model_config = ConfigDict(extra="allow")
-
-    default: str = "ru"
-    supported: list[str] = Field(default_factory=lambda: ["ru", "en"])
-    detection: Literal["auto", "hint_only"] = "auto"
-
-
 class AnalysisConfig(BaseModel):
     model_config = ConfigDict(extra="allow")
 
@@ -32,7 +24,6 @@ class AnalysisConfig(BaseModel):
 class AnalyzerProfile(BaseModel):
     model_config = ConfigDict(extra="allow")
 
-    language: LanguageConfig = Field(default_factory=LanguageConfig)
     analysis: AnalysisConfig = Field(default_factory=AnalysisConfig)
 
 

@@ -187,3 +187,20 @@ async def test_missing_context_passthrough_when_allowed() -> None:
     )
     assert response.context_found is False
     assert response.output == "raw chunk"
+
+
+@pytest.mark.asyncio
+async def test_passthrough_policy_returns_plain_text_without_language_resolution() -> None:
+    service = _make_service()
+
+    masked = await service.mask_items(
+        request_id="req-pass",
+        policy_name="onprem_passthrough",
+        items=[TextInput(id="m1", text="Привет hello user@example.com")],
+    )
+
+    assert masked.mode == "passthrough"
+    assert masked.findings_count == 0
+    assert masked.placeholders_count == 0
+    assert masked.items[0].text == "Привет hello user@example.com"
+    assert masked.items[0].detections == []
