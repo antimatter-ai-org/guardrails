@@ -34,6 +34,7 @@ class DetectResultItem(BaseModel):
     id: str
     language: str
     detections: list[DetectionItem]
+    diagnostics: dict[str, object] = Field(default_factory=dict)
 
 
 class DetectResponse(BaseModel):
@@ -56,6 +57,7 @@ class MaskResultItem(BaseModel):
     text: str
     language: str
     detections: list[DetectionItem]
+    diagnostics: dict[str, object] = Field(default_factory=dict)
 
 
 class MaskResponse(BaseModel):

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 from datetime import UTC, datetime
 from pathlib import Path
@@ -75,6 +76,46 @@ def _download_hf_model(*, output_dir: str, model_name: str, namespace: str) -> s
     return str(local_dir)
 
 
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        while True:
+            chunk = handle.read(1024 * 1024)
+            if not chunk:
+                break
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _sha256_tree(path: Path) -> tuple[str, int]:
+    if path.is_file():
+        return _sha256_file(path), 1
+
+    entries: list[str] = []
+    file_count = 0
+    for file_path in sorted((candidate for candidate in path.rglob("*") if candidate.is_file()), key=lambda item: str(item)):
+        relative = file_path.relative_to(path).as_posix()
+        entries.append(f"{relative}:{_sha256_file(file_path)}")
+        file_count += 1
+    digest = hashlib.sha256("\n".join(entries).encode("utf-8")).hexdigest()
+    return digest, file_count
+
+
+def _artifact_checksums(model_paths: dict[str, str]) -> dict[str, dict[str, object]]:
+    output: dict[str, dict[str, object]] = {}
+    for model_name, model_path in sorted(model_paths.items()):
+        path = Path(model_path)
+        if not path.exists():
+            continue
+        sha256_tree, files = _sha256_tree(path)
+        output[model_name] = {
+            "path": model_path,
+            "sha256_tree": sha256_tree,
+            "files": files,
+        }
+    return output
+
+
 def run(output_dir: str, policy_path: str, extra_gliner_models: list[str]) -> int:
     root = Path(output_dir).expanduser().resolve()
     root.mkdir(parents=True, exist_ok=True)
@@ -109,6 +150,11 @@ def run(output_dir: str, policy_path: str, extra_gliner_models: list[str]) -> in
         "gliner_models": downloaded_gliner,
         "transformers_models": downloaded_transformers,
         "hf_token_classifier_models": downloaded_token_classifiers,
+        "checksums": {
+            "gliner_models": _artifact_checksums(downloaded_gliner),
+            "transformers_models": _artifact_checksums(downloaded_transformers),
+            "hf_token_classifier_models": _artifact_checksums(downloaded_token_classifiers),
+        },
     }
     manifest_path = root / "manifest.json"
     manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")

@@ -115,6 +115,8 @@ async def test_mask_and_unmask_batch_flow() -> None:
     assert masked.placeholders_count == 1
     masked_text = masked.items[0].text
     assert "ivan@example.com" not in masked_text
+    assert masked.items[0].diagnostics["elapsed_ms"] >= 0
+    assert isinstance(masked.items[0].diagnostics["detector_timing_ms"], dict)
 
     response = await service.unmask_items(
         request_id="req-1",

@@ -263,6 +263,40 @@ Results:
 2. Full unit suite after Stage 8: `93 passed, 2 skipped`.
 3. No metric delta is expected yet because `hf_token_classifier` is added as a pluggable recognizer type and is not enabled in default policy profiles.
 
+### 2026-02-15 - Stage 9 Implemented
+
+Status: completed
+
+Implemented:
+
+1. Diagnostics payload in analysis/runtime API flow:
+   1. Added `AnalysisDiagnostics` model.
+   2. Added `analyze_text_with_diagnostics(...)` to analysis service.
+   3. Guardrails detect/mask item results now include diagnostics with:
+      1. per-detector timing (ms)
+      2. per-detector span counts
+      3. detector errors
+      4. postprocess mutation counters
+      5. limit flags
+2. Safety limits (always-on):
+   1. Max per-sample analysis budget (time).
+   2. Max per-sample final detections (`256`) with deterministic truncation by score.
+   3. Registry execution now enforces deadline checks during recognizer loops.
+3. Span-normalizer observability:
+   1. `normalize_detections(...)` now optionally returns mutation stats.
+4. Offline asset manifest hardening:
+   1. `download-models` now computes deterministic SHA256 tree hashes for downloaded artifacts.
+   2. `manifest.json` includes per-namespace checksums and file counts.
+5. Tests:
+   1. Added `tests/unit/test_analysis_diagnostics.py`.
+   2. Extended `tests/unit/test_download_models.py` to cover checksum manifest output.
+
+Results:
+
+1. Targeted Stage 9 test suites passed.
+2. Full unit suite after Stage 9: `95 passed, 2 skipped`.
+3. No significant divergence from expected implementation behavior observed.
+
 ## 1. Why this refactor
 
 Primary goal: materially improve real-world leakage prevention quality while keeping masking/unmasking behavior stable and production-safe.

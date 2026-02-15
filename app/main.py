@@ -149,6 +149,7 @@ async def detect_endpoint(request: DetectRequest) -> DetectResponse:
                 id=item.id,
                 language=item.language,
                 detections=_to_detection_items(item.detections),
+                diagnostics=item.diagnostics,
             )
             for item in result.items
         ],
@@ -187,6 +188,7 @@ async def mask_endpoint(request: MaskRequest) -> MaskResponse:
                 text=item.text,
                 language=item.language,
                 detections=_to_detection_items(item.detections),
+                diagnostics=item.diagnostics,
             )
             for item in result.items
         ],

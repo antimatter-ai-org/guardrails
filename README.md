@@ -17,6 +17,7 @@ Router call sequence:
 - Reversible masking with Redis-backed request state.
 - RU/EN recognizer stack with Presidio backend, including GLiNER enabled by default.
 - Streaming-safe unmasking with chunk boundary buffering.
+- Per-item diagnostics in detect/mask responses (detector timings/counts, postprocess counters, limit flags).
 - Global runtime switch:
   - `cpu`: in-process model execution (tries MPS on Apple Silicon)
   - `cuda`: model execution through PyTriton
@@ -29,6 +30,14 @@ Router call sequence:
 - `POST /v1/guardrails/unmask`
 - `POST /v1/guardrails/unmask-stream`
 - `POST /v1/guardrails/finalize`
+
+`detect` and `mask` response items include `diagnostics`:
+- `elapsed_ms`
+- `detector_timing_ms`
+- `detector_span_counts`
+- `detector_errors`
+- `postprocess_mutations`
+- `limit_flags` (`analysis_timeout_exceeded`, `max_spans_truncated`)
 
 ## Runtime modes
 
@@ -57,6 +66,7 @@ This writes a model bundle and `manifest.json` into `./.models`:
 - GLiNER models from recognizer definitions
 - Transformer NLP models from analyzer profiles
 - Hugging Face token-classifier models from `hf_token_classifier` recognizers
+- Deterministic artifact checksums (`sha256_tree`) and file counts per model artifact
 
 Run service in offline mode on host:
 

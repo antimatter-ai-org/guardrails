@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from typing import Any
 
 from app.core.analysis.service import PresidioAnalysisService
 from app.core.masking.reversible import ReversibleMaskingEngine
-from app.models.entities import Detection
+from app.models.entities import AnalysisDiagnostics, Detection
 from app.policy import PolicyResolver
 from app.storage.redis_store import RedisMappingStore
 
@@ -38,6 +39,7 @@ class ItemDetectionResult:
     id: str
     detections: list[Detection]
     language: str
+    diagnostics: dict[str, Any]
 
 
 @dataclass(slots=True)
@@ -46,6 +48,7 @@ class ItemMaskResult:
     text: str
     detections: list[Detection]
     language: str
+    diagnostics: dict[str, Any]
 
 
 @dataclass(slots=True)
@@ -114,6 +117,52 @@ class GuardrailsService:
     def _max_placeholder_len(placeholders: dict[str, str]) -> int:
         return max((len(key) for key in placeholders), default=1)
 
+    @staticmethod
+    def _serialize_diagnostics(diagnostics: AnalysisDiagnostics | None) -> dict[str, Any]:
+        if diagnostics is None:
+            return {
+                "elapsed_ms": 0.0,
+                "detector_timing_ms": {},
+                "detector_span_counts": {},
+                "detector_errors": {},
+                "postprocess_mutations": {},
+                "limit_flags": {},
+            }
+        return {
+            "elapsed_ms": float(diagnostics.elapsed_ms),
+            "detector_timing_ms": dict(diagnostics.detector_timing_ms),
+            "detector_span_counts": dict(diagnostics.detector_span_counts),
+            "detector_errors": dict(diagnostics.detector_errors),
+            "postprocess_mutations": dict(diagnostics.postprocess_mutations),
+            "limit_flags": dict(diagnostics.limit_flags),
+        }
+
+    def _analyze_with_diagnostics(
+        self,
+        *,
+        text: str,
+        profile_name: str,
+        policy_min_score: float,
+        language_hint: str | None,
+    ) -> tuple[str, list[Detection], dict[str, Any]]:
+        analyzer = getattr(self._analysis_service, "analyze_text_with_diagnostics", None)
+        if callable(analyzer):
+            language, detections, diagnostics = analyzer(
+                text=text,
+                profile_name=profile_name,
+                policy_min_score=policy_min_score,
+                language_hint=language_hint,
+            )
+            return language, detections, self._serialize_diagnostics(diagnostics)
+
+        language, detections = self._analysis_service.analyze_text(
+            text=text,
+            profile_name=profile_name,
+            policy_min_score=policy_min_score,
+            language_hint=language_hint,
+        )
+        return language, detections, self._serialize_diagnostics(None)
+
     async def detect_items(
         self,
         items: list[TextInput],
@@ -124,7 +173,7 @@ class GuardrailsService:
         item_results: list[ItemDetectionResult] = []
         findings_count = 0
         for item in items:
-            language, detections = self._analysis_service.analyze_text(
+            language, detections, diagnostics = self._analyze_with_diagnostics(
                 text=item.text,
                 profile_name=policy.analyzer_profile,
                 policy_min_score=policy.min_score,
@@ -132,7 +181,14 @@ class GuardrailsService:
             )
             detections = ReversibleMaskingEngine.resolve_overlaps(detections)
             findings_count += len(detections)
-            item_results.append(ItemDetectionResult(id=item.id, detections=detections, language=language))
+            item_results.append(
+                ItemDetectionResult(
+                    id=item.id,
+                    detections=detections,
+                    language=language,
+                    diagnostics=diagnostics,
+                )
+            )
 
         return DetectOperationResult(
             policy_name=resolved_policy_name,
@@ -179,6 +235,7 @@ class GuardrailsService:
                             profile_name=policy.analyzer_profile,
                             language_hint=item.language_hint,
                         ),
+                        diagnostics={},
                     )
                     for item in items
                 ],
@@ -190,7 +247,7 @@ class GuardrailsService:
         request_hint = self._request_hint(request_id)
 
         for idx, item in enumerate(items):
-            language, detections = self._analysis_service.analyze_text(
+            language, detections, diagnostics = self._analyze_with_diagnostics(
                 text=item.text,
                 profile_name=policy.analyzer_profile,
                 policy_min_score=policy.min_score,
@@ -206,6 +263,7 @@ class GuardrailsService:
                     text=masked.text,
                     detections=masked.detections,
                     language=language,
+                    diagnostics=diagnostics,
                 )
             )
             for placeholder, original in masked.placeholders.items():

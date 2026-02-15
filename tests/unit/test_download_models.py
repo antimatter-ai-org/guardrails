@@ -42,7 +42,10 @@ def test_download_models_run_writes_token_classifier_manifest(tmp_path: Path, mo
     monkeypatch.setattr(download_models, "apply_model_env", lambda **_: None)
 
     def fake_download(*, output_dir: str, model_name: str, namespace: str) -> str:
-        return str(Path(output_dir) / namespace / model_name.replace("/", "__"))
+        model_path = Path(output_dir) / namespace / model_name.replace("/", "__")
+        model_path.mkdir(parents=True, exist_ok=True)
+        (model_path / "weights.bin").write_text("x", encoding="utf-8")
+        return str(model_path)
 
     monkeypatch.setattr(download_models, "_download_hf_model", fake_download)
 
@@ -53,3 +56,6 @@ def test_download_models_run_writes_token_classifier_manifest(tmp_path: Path, mo
     assert manifest["hf_token_classifier_models"] == {
         "dslim/bert-base-NER": str(tmp_path / "hf_token_classifier" / "dslim__bert-base-NER")
     }
+    checksums = manifest["checksums"]["hf_token_classifier_models"]["dslim/bert-base-NER"]
+    assert checksums["files"] == 1
+    assert len(str(checksums["sha256_tree"])) == 64

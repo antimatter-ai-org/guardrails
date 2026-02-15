@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from dataclasses import replace
 
 from app.models.entities import Detection
@@ -24,6 +25,14 @@ _LOCATION_MARKERS = (
     "apt",
     "house",
 )
+
+
+@dataclass(slots=True)
+class NormalizationStats:
+    trimmed_spans: int = 0
+    expanded_spans: int = 0
+    invalid_spans_dropped: int = 0
+    overlaps_dropped: int = 0
 
 
 def _trim_bounds(text: str, start: int, end: int) -> tuple[int, int]:
@@ -116,9 +125,9 @@ def _normalize_generic(*, text: str, detection: Detection) -> Detection:
     return replace(detection, start=start, end=end, text=text[start:end])
 
 
-def _resolve_overlaps(detections: list[Detection]) -> list[Detection]:
+def _resolve_overlaps(detections: list[Detection]) -> tuple[list[Detection], int]:
     if not detections:
-        return []
+        return [], 0
     sorted_by_priority = sorted(
         detections,
         key=lambda item: (-float(item.score), -(item.end - item.start), item.start),
@@ -130,35 +139,66 @@ def _resolve_overlaps(detections: list[Detection]) -> list[Detection]:
         if any(not (candidate.end <= item.start or candidate.start >= item.end) for item in selected):
             continue
         selected.append(candidate)
-    return sorted(selected, key=lambda item: item.start)
+    selected_sorted = sorted(selected, key=lambda item: item.start)
+    return selected_sorted, max(0, len(detections) - len(selected_sorted))
 
 
 def normalize_detections(
     *,
     text: str,
     detections: list[Detection],
-) -> list[Detection]:
+    return_stats: bool = False,
+) -> list[Detection] | tuple[list[Detection], dict[str, int]]:
     if not detections:
-        return detections
+        empty_stats = {
+            "trimmed_spans": 0,
+            "expanded_spans": 0,
+            "invalid_spans_dropped": 0,
+            "overlaps_dropped": 0,
+        }
+        return (detections, empty_stats) if return_stats else detections
     max_expansion_chars = 180
     normalize_location_enabled = True
     normalize_identifier_enabled = True
 
     normalized: list[Detection] = []
+    stats = NormalizationStats()
     for item in detections:
         canonical = str(item.metadata.get("canonical_label") or "").lower()
+        updated = item
         if canonical == "location" and normalize_location_enabled:
-            normalized.append(
-                _normalize_location(
-                    text=text,
-                    detection=item,
-                    max_expansion_chars=max_expansion_chars,
-                )
+            updated = _normalize_location(
+                text=text,
+                detection=item,
+                max_expansion_chars=max_expansion_chars,
             )
-            continue
-        if canonical == "identifier" and normalize_identifier_enabled:
-            normalized.append(_normalize_identifier(text=text, detection=item))
-            continue
-        normalized.append(_normalize_generic(text=text, detection=item))
+        elif canonical == "identifier" and normalize_identifier_enabled:
+            updated = _normalize_identifier(text=text, detection=item)
+        else:
+            updated = _normalize_generic(text=text, detection=item)
 
-    return _resolve_overlaps(normalized)
+        if updated.end <= updated.start:
+            stats.invalid_spans_dropped += 1
+            continue
+
+        old_len = item.end - item.start
+        new_len = updated.end - updated.start
+        if old_len > 0 and new_len > old_len:
+            stats.expanded_spans += 1
+        elif old_len > 0 and new_len < old_len:
+            stats.trimmed_spans += 1
+
+        normalized.append(updated)
+
+    resolved, overlaps_dropped = _resolve_overlaps(normalized)
+    stats.overlaps_dropped = overlaps_dropped
+    payload = {
+        "trimmed_spans": stats.trimmed_spans,
+        "expanded_spans": stats.expanded_spans,
+        "invalid_spans_dropped": stats.invalid_spans_dropped,
+        "overlaps_dropped": stats.overlaps_dropped,
+    }
+
+    if return_stats:
+        return resolved, payload
+    return resolved

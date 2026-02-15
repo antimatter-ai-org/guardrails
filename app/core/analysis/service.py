@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import logging
 from pathlib import Path
+from time import perf_counter
 from typing import Any
 
 from presidio_analyzer import AnalyzerEngine, EntityRecognizer, RecognizerRegistry, RecognizerResult
@@ -11,11 +13,17 @@ from app.core.analysis.language import resolve_language, resolve_languages
 from app.core.analysis.mapping import canonicalize_entity_type
 from app.core.analysis.recognizers import build_recognizer_registry
 from app.core.analysis.span_normalizer import normalize_detections
-from app.models.entities import Detection
+from app.models.entities import AnalysisDiagnostics, Detection
 from app.settings import settings
+
+logger = logging.getLogger(__name__)
 
 
 class PresidioAnalysisService:
+    _MAX_SAMPLE_ANALYSIS_SECONDS = 5.0
+    _MAX_SAMPLE_DETECTIONS = 256
+    _MAX_RAW_RECOGNIZER_RESULTS = 1024
+
     def __init__(self, policy_config: PolicyConfig) -> None:
         self._config = policy_config
         self._engines: dict[str, AnalyzerEngine] = {}
@@ -127,17 +135,63 @@ class PresidioAnalysisService:
     def _requires_analyzer_engine(profile: AnalyzerProfile) -> bool:
         return bool(profile.analysis.use_builtin_recognizers or profile.analysis.nlp_engine != "none")
 
-    def _analyze_with_registry(self, profile_name: str, text: str, language: str) -> list[RecognizerResult]:
+    def _analyze_with_registry(
+        self,
+        profile_name: str,
+        text: str,
+        language: str,
+        *,
+        deadline: float,
+    ) -> tuple[list[RecognizerResult], dict[str, float], dict[str, int], dict[str, str], bool]:
         registry = self._get_registry(profile_name)
         raw_results: list[RecognizerResult] = []
+        detector_timing_ms: dict[str, float] = {}
+        detector_span_counts: dict[str, int] = {}
+        detector_errors: dict[str, str] = {}
+        timeout_exceeded = False
 
         for recognizer in registry.recognizers:
+            if perf_counter() >= deadline:
+                timeout_exceeded = True
+                break
             if recognizer.get_supported_language() != language:
                 continue
             entities = recognizer.get_supported_entities()
-            raw_results.extend(recognizer.analyze(text=text, entities=entities, nlp_artifacts=None))
+            recognizer_name = str(getattr(recognizer, "name", recognizer.__class__.__name__))
+            started_at = perf_counter()
+            try:
+                recognized = recognizer.analyze(text=text, entities=entities, nlp_artifacts=None)
+            except Exception as exc:
+                recognized = []
+                detector_errors[recognizer_name] = str(exc)
+                logger.warning("recognizer failed (%s): %s", recognizer_name, exc)
+            elapsed_ms = (perf_counter() - started_at) * 1000.0
+            detector_timing_ms[recognizer_name] = detector_timing_ms.get(recognizer_name, 0.0) + elapsed_ms
+            detector_span_counts[recognizer_name] = detector_span_counts.get(recognizer_name, 0) + len(recognized)
+            raw_results.extend(recognized)
+            if perf_counter() >= deadline:
+                timeout_exceeded = True
+                break
+            if len(raw_results) >= self._MAX_RAW_RECOGNIZER_RESULTS:
+                break
 
-        return EntityRecognizer.remove_duplicates(raw_results)
+        return (
+            EntityRecognizer.remove_duplicates(raw_results),
+            detector_timing_ms,
+            detector_span_counts,
+            detector_errors,
+            timeout_exceeded,
+        )
+
+    @staticmethod
+    def _merge_float_map(target: dict[str, float], source: dict[str, float]) -> None:
+        for key, value in source.items():
+            target[key] = target.get(key, 0.0) + float(value)
+
+    @staticmethod
+    def _merge_int_map(target: dict[str, int], source: dict[str, int]) -> None:
+        for key, value in source.items():
+            target[key] = target.get(key, 0) + int(value)
 
     def analyze_text(
         self,
@@ -147,6 +201,24 @@ class PresidioAnalysisService:
         policy_min_score: float,
         language_hint: str | None,
     ) -> tuple[str, list[Detection]]:
+        language, detections, _ = self.analyze_text_with_diagnostics(
+            text=text,
+            profile_name=profile_name,
+            policy_min_score=policy_min_score,
+            language_hint=language_hint,
+        )
+        return language, detections
+
+    def analyze_text_with_diagnostics(
+        self,
+        *,
+        text: str,
+        profile_name: str,
+        policy_min_score: float,
+        language_hint: str | None,
+    ) -> tuple[str, list[Detection], AnalysisDiagnostics]:
+        started_at = perf_counter()
+        deadline = started_at + self._MAX_SAMPLE_ANALYSIS_SECONDS
         profile = self._config.analyzer_profiles.get(profile_name)
         if profile is None:
             raise KeyError(f"analyzer profile not found: {profile_name}")
@@ -157,22 +229,54 @@ class PresidioAnalysisService:
             language_hint=language_hint,
         )
         language = languages[0]
+        detector_timing_ms: dict[str, float] = {}
+        detector_span_counts: dict[str, int] = {}
+        detector_errors: dict[str, str] = {}
+        timeout_exceeded = False
+        spans_truncated = False
 
         results_with_language: list[tuple[str, RecognizerResult]] = []
         if self._requires_analyzer_engine(profile):
             engine = self._get_engine(profile_name)
             for current_language in languages:
-                results = engine.analyze(
-                    text=text,
-                    language=current_language,
-                    score_threshold=float(policy_min_score),
-                    return_decision_process=False,
-                )
+                if perf_counter() >= deadline:
+                    timeout_exceeded = True
+                    break
+                recognizer_name = f"analyzer_engine:{current_language}"
+                call_started = perf_counter()
+                try:
+                    results = engine.analyze(
+                        text=text,
+                        language=current_language,
+                        score_threshold=float(policy_min_score),
+                        return_decision_process=False,
+                    )
+                except Exception as exc:
+                    results = []
+                    detector_errors[recognizer_name] = str(exc)
+                    logger.warning("analyzer engine failed (%s): %s", recognizer_name, exc)
+                detector_timing_ms[recognizer_name] = (perf_counter() - call_started) * 1000.0
+                detector_span_counts[recognizer_name] = len(results)
+                if perf_counter() >= deadline:
+                    timeout_exceeded = True
                 for result in results:
                     results_with_language.append((current_language, result))
         else:
             for current_language in languages:
-                results = self._analyze_with_registry(profile_name, text, current_language)
+                if perf_counter() >= deadline:
+                    timeout_exceeded = True
+                    break
+                (
+                    results,
+                    language_timing,
+                    language_spans,
+                    language_errors,
+                    language_timeout_exceeded,
+                ) = self._analyze_with_registry(profile_name, text, current_language, deadline=deadline)
+                self._merge_float_map(detector_timing_ms, language_timing)
+                self._merge_int_map(detector_span_counts, language_spans)
+                detector_errors.update(language_errors)
+                timeout_exceeded = timeout_exceeded or language_timeout_exceeded
                 for result in results:
                     results_with_language.append((current_language, result))
 
@@ -216,11 +320,31 @@ class PresidioAnalysisService:
                 )
             )
 
-        detections = normalize_detections(
+        detections, postprocess_stats = normalize_detections(
             text=text,
             detections=detections,
+            return_stats=True,
         )
-        return language, detections
+        if len(detections) > self._MAX_SAMPLE_DETECTIONS:
+            spans_truncated = True
+            detections = sorted(
+                detections,
+                key=lambda item: (-float(item.score), item.start, -(item.end - item.start)),
+            )[: self._MAX_SAMPLE_DETECTIONS]
+            detections = sorted(detections, key=lambda item: item.start)
+
+        diagnostics = AnalysisDiagnostics(
+            elapsed_ms=(perf_counter() - started_at) * 1000.0,
+            detector_timing_ms={key: round(value, 3) for key, value in detector_timing_ms.items()},
+            detector_span_counts=dict(detector_span_counts),
+            detector_errors=dict(detector_errors),
+            postprocess_mutations=dict(postprocess_stats),
+            limit_flags={
+                "analysis_timeout_exceeded": bool(timeout_exceeded),
+                "max_spans_truncated": bool(spans_truncated),
+            },
+        )
+        return language, detections, diagnostics
 
     def resolve_language(
         self,
