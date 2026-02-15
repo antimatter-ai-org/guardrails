@@ -38,6 +38,12 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--output-dir", default="reports/evaluations")
     parser.add_argument("--env-file", default=".env.eval")
     parser.add_argument("--hf-token-env", default="HF_TOKEN")
+    parser.add_argument(
+        "--strict-split",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Skip datasets missing the requested split instead of falling back to another split.",
+    )
     parser.add_argument("--max-samples", type=int, default=None)
     parser.add_argument("--errors-preview-limit", type=int, default=25)
     parser.add_argument(
@@ -94,6 +100,35 @@ def _format_duration(seconds: float) -> str:
 
 def _parse_csv(value: str) -> list[str]:
     return [item.strip() for item in value.split(",") if item.strip()]
+
+
+def _resolve_dataset_split(
+    *,
+    dataset_name: str,
+    requested_split: str,
+    hf_token: str | None,
+    strict_split: bool,
+) -> tuple[str | None, list[str]]:
+    try:
+        from datasets import get_dataset_split_names
+    except Exception:
+        return requested_split, []
+
+    try:
+        split_names = [str(item) for item in get_dataset_split_names(dataset_name, token=hf_token)]
+    except Exception:
+        return requested_split, []
+
+    available = set(split_names)
+    if requested_split in available:
+        return requested_split, sorted(available)
+    if strict_split:
+        return None, sorted(available)
+    if "train" in available:
+        return "train", sorted(available)
+    if available:
+        return sorted(available)[0], sorted(available)
+    return None, []
 
 
 def _slice_metrics(
@@ -273,8 +308,33 @@ def main() -> int:
 
     for dataset_name in selected_datasets:
         adapter = get_dataset_adapter(dataset_name)
+        split_to_use, available_splits = _resolve_dataset_split(
+            dataset_name=dataset_name,
+            requested_split=args.split,
+            hf_token=hf_token,
+            strict_split=args.strict_split,
+        )
+        if split_to_use is None:
+            available_text = ", ".join(available_splits) if available_splits else "unknown"
+            print(
+                (
+                    f"[warn] dataset={dataset_name} missing split='{args.split}' "
+                    f"(available: {available_text}); skipping due to --strict-split"
+                ),
+                flush=True,
+            )
+            continue
+        if split_to_use != args.split:
+            available_text = ", ".join(available_splits) if available_splits else "unknown"
+            print(
+                (
+                    f"[warn] dataset={dataset_name} missing split='{args.split}', "
+                    f"using split='{split_to_use}' (available: {available_text})"
+                ),
+                flush=True,
+            )
         samples = adapter.load_samples(
-            split=args.split,
+            split=split_to_use,
             cache_dir=args.cache_dir,
             hf_token=hf_token,
             max_samples=args.max_samples,

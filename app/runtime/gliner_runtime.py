@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import threading
 from abc import ABC, abstractmethod
 from typing import Any
@@ -108,6 +109,7 @@ class PyTritonGlinerRuntime(GlinerRuntime):
         self._init_timeout_s = init_timeout_s
         self._infer_timeout_s = infer_timeout_s
         self._chunking = (chunking or GlinerChunkingConfig()).normalized()
+        self._max_batch_size_hint = 32
         self.device = "cuda"
 
     @staticmethod
@@ -131,6 +133,35 @@ class PyTritonGlinerRuntime(GlinerRuntime):
             predict_batch=self._predict_batch,
         )
 
+    @staticmethod
+    def _extract_server_max_batch_size(error: Exception) -> int | None:
+        message = str(error)
+        match = re.search(r"batch-size must be <=\s*(\d+)", message, re.IGNORECASE)
+        if not match:
+            return None
+        value = int(match.group(1))
+        if value < 1:
+            return None
+        return value
+
+    @staticmethod
+    def _parse_detections_payload(payload: Any) -> list[list[dict[str, Any]]]:
+        parsed_batch: list[list[dict[str, Any]]] = []
+        if isinstance(payload, np.ndarray):
+            rows = list(payload)
+        else:
+            rows = [payload]
+
+        for row in rows:
+            cell = row[0] if isinstance(row, (list, tuple, np.ndarray)) and len(row) > 0 else row
+            raw_payload = PyTritonGlinerRuntime._extract_detection_payload(cell)
+            parsed = json.loads(raw_payload)
+            if not isinstance(parsed, list):
+                parsed_batch.append([])
+                continue
+            parsed_batch.append([item for item in parsed if isinstance(item, dict)])
+        return parsed_batch
+
     def _predict_batch(self, texts: list[str], labels: list[str], threshold: float) -> list[list[dict[str, Any]]]:
         try:
             from pytriton.client import ModelClient
@@ -140,39 +171,38 @@ class PyTritonGlinerRuntime(GlinerRuntime):
         if not texts:
             return []
 
-        text_batch = np.array([[text.encode("utf-8")] for text in texts], dtype=object)
-        labels_payload = json.dumps(labels).encode("utf-8")
-        labels_batch = np.array([[labels_payload] for _ in texts], dtype=object)
-        threshold_batch = np.array([[threshold] for _ in texts], dtype=np.float32)
-
+        labels_payload = json.dumps(labels, ensure_ascii=False).encode("utf-8")
+        outputs: list[list[dict[str, Any]]] = []
+        max_batch_size = max(1, int(self._max_batch_size_hint))
         with ModelClient(
             url=self._pytriton_url,
             model_name=self._model_name,
             init_timeout_s=self._init_timeout_s,
             inference_timeout_s=self._infer_timeout_s,
         ) as client:
-            result = client.infer_batch(
-                text=text_batch,
-                labels_json=labels_batch,
-                threshold=threshold_batch,
-            )
-
-        payload = result.get("detections_json", [])
-        parsed_batch: list[list[dict[str, Any]]] = []
-        if isinstance(payload, np.ndarray):
-            rows = list(payload)
-        else:
-            rows = [payload]
-
-        for row in rows:
-            cell = row[0] if isinstance(row, (list, tuple, np.ndarray)) and len(row) > 0 else row
-            raw_payload = self._extract_detection_payload(cell)
-            parsed = json.loads(raw_payload)
-            if not isinstance(parsed, list):
-                parsed_batch.append([])
-                continue
-            parsed_batch.append([item for item in parsed if isinstance(item, dict)])
-        return parsed_batch
+            idx = 0
+            while idx < len(texts):
+                end = min(idx + max_batch_size, len(texts))
+                chunk = texts[idx:end]
+                text_batch = np.array([[text.encode("utf-8")] for text in chunk], dtype=object)
+                labels_batch = np.array([[labels_payload] for _ in chunk], dtype=object)
+                threshold_batch = np.array([[threshold] for _ in chunk], dtype=np.float32)
+                try:
+                    result = client.infer_batch(
+                        text=text_batch,
+                        labels_json=labels_batch,
+                        threshold=threshold_batch,
+                    )
+                except Exception as exc:
+                    server_limit = self._extract_server_max_batch_size(exc)
+                    if server_limit is not None and server_limit < max_batch_size:
+                        max_batch_size = server_limit
+                        self._max_batch_size_hint = server_limit
+                        continue
+                    raise
+                outputs.extend(self._parse_detections_payload(result.get("detections_json", [])))
+                idx = end
+        return outputs
 
 
 def build_gliner_runtime(
