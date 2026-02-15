@@ -20,22 +20,24 @@ Manual evaluation framework for guardrails detection quality on public datasets.
 
 ## CLI
 
-Primary arguments:
+Arguments:
 
-- `--dataset` repeatable dataset name
-- `--split` (default `test`)
-- `--policy-path`
-- `--policy-name`
-- `--cache-dir`
-- `--output-dir`
-- `--env-file`
-- `--hf-token-env`
-- `--strict-split / --no-strict-split`
-- `--synthetic-test-size`
-- `--synthetic-split-seed`
-- `--max-samples`
-- `--progress-every-samples`
-- `--progress-every-seconds`
+- `--dataset`: dataset name; repeatable. If omitted, evaluator runs all supported datasets.
+- `--split`: requested split name (default `test`).
+- `--policy-path`: path to policy YAML (default `configs/policy.yaml`).
+- `--policy-name`: policy id from YAML. If omitted, evaluator uses `default_policy`.
+- `--cache-dir`: Hugging Face/datasets cache directory (default `.eval_cache/hf`).
+- `--output-dir`: directory for JSON/Markdown reports (default `reports/evaluations`).
+- `--env-file`: env file loaded before run (default `.env.eval`).
+- `--hf-token-env`: env var name holding HF token (default `HF_TOKEN`).
+- `--strict-split`: do not fall back to unrelated native split when requested split is missing.
+- `--no-strict-split`: allow fallback to another available native split (typically `train`).
+- `--synthetic-test-size`: test ratio for generated synthetic split on datasets without native test (default `0.2`).
+- `--synthetic-split-seed`: random seed for synthetic split generation/caching (default `42`).
+- `--max-samples`: optional cap on evaluated samples per dataset.
+- `--errors-preview-limit`: max number of mismatch examples saved in report (default `25`).
+- `--progress-every-samples`: print progress every N processed samples (default `1000`).
+- `--progress-every-seconds`: also print progress every N seconds (default `15.0`).
 
 ## Report Outputs
 
@@ -130,38 +132,7 @@ Related report components outside `metrics`:
 - `dataset_slices`
 - `errors_preview`
 
-Primary metric families:
-
-- `exact_agnostic`
-- `overlap_agnostic`
-- `exact_canonical`
-- `overlap_canonical`
-- `char_canonical`
-- `token_canonical`
-- `per_label_exact`
-- `per_label_char`
-
-Each metric payload uses the same counters/statistics:
-
-- `precision`
-- `recall`
-- `f1`
-- `residual_miss_ratio`
-- `true_positives`
-- `false_positives`
-- `false_negatives`
-
-Definitions:
-
-- `true_positives` (`TP`): predictions matched to gold spans.
-- `false_positives` (`FP`): predictions not matched to gold.
-- `false_negatives` (`FN`): gold spans missed by predictions.
-- `precision`: `TP / (TP + FP)`; higher means fewer false alarms.
-- `recall`: `TP / (TP + FN)`; higher means fewer misses.
-- `f1`: harmonic mean of precision and recall.
-- `residual_miss_ratio`: `1 - recall`; direct miss/leakage proxy.
-
-Metric family semantics:
+Metric families and meanings:
 
 - `exact_agnostic`: exact boundary match, labels ignored.
 - `overlap_agnostic`: span overlap match, labels ignored.
@@ -169,8 +140,18 @@ Metric family semantics:
 - `overlap_canonical`: overlap + canonical label match.
 - `char_canonical`: character-level overlap on canonical labeled spans.
 - `token_canonical`: token-level overlap on canonical labeled spans.
-- `per_label_exact`: exact canonical metrics per label.
-- `per_label_char`: character-level canonical metrics per label.
+- `per_label_exact`: exact canonical metrics broken down by label.
+- `per_label_char`: character-level canonical metrics broken down by label.
+
+Fields inside every metric payload:
+
+- `true_positives` (`TP`): predictions matched to gold spans.
+- `false_positives` (`FP`): predictions not matched to gold spans.
+- `false_negatives` (`FN`): gold spans missed by predictions.
+- `precision`: `TP / (TP + FP)`; higher means fewer false alarms.
+- `recall`: `TP / (TP + FN)`; higher means fewer misses.
+- `f1`: harmonic mean of precision and recall.
+- `residual_miss_ratio`: `1 - recall`; direct miss/leakage proxy.
 
 Practical interpretation:
 
