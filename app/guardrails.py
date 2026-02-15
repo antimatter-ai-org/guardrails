@@ -195,8 +195,10 @@ class GuardrailsService:
         items: list[TextInput],
         policy_name: str | None = None,
         store_context: bool = True,
+        storage_ttl_seconds: int | None = None,
     ) -> MaskOperationResult:
         resolved_policy_name, policy = self._policy_resolver.resolve_policy(policy_name=policy_name)
+        effective_ttl = int(storage_ttl_seconds or policy.storage_ttl_seconds)
 
         if policy.mode == "passthrough":
             if store_context:
@@ -206,9 +208,9 @@ class GuardrailsService:
                         "policy_name": resolved_policy_name,
                         "placeholders": {},
                         "max_placeholder_len": 1,
-                        "storage_ttl_seconds": policy.storage_ttl_seconds,
+                        "storage_ttl_seconds": effective_ttl,
                     },
-                    ttl_seconds=policy.storage_ttl_seconds,
+                    ttl_seconds=effective_ttl,
                 )
             return MaskOperationResult(
                 request_id=request_id,
@@ -267,9 +269,9 @@ class GuardrailsService:
                     "policy_name": resolved_policy_name,
                     "placeholders": all_placeholders,
                     "max_placeholder_len": self._max_placeholder_len(all_placeholders),
-                    "storage_ttl_seconds": policy.storage_ttl_seconds,
+                    "storage_ttl_seconds": effective_ttl,
                 },
-                ttl_seconds=policy.storage_ttl_seconds,
+                ttl_seconds=effective_ttl,
             )
 
         return MaskOperationResult(

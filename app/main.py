@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import logging
+from datetime import UTC, datetime, timedelta
+from time import perf_counter
 from typing import Any
+from uuid import uuid4
 
 from fastapi import FastAPI, HTTPException
 from redis.asyncio import Redis
@@ -17,21 +20,21 @@ from app.guardrails import (
 )
 from app.model_assets import apply_model_env
 from app.models.api import (
-    DetectRequest,
-    DetectResponse,
-    DetectResultItem,
-    DetectionItem,
-    FinalizeRequest,
-    FinalizeResponse,
-    MaskRequest,
-    MaskResponse,
-    MaskResultItem,
-    PolicyListResponse,
-    StreamUnmaskRequest,
-    StreamUnmaskResponse,
-    UnmaskRequest,
-    UnmaskResponse,
-    UnmaskResultItem,
+    ActionType,
+    ApplyRequest,
+    ApplyResponse,
+    ApplyStreamRequest,
+    ApplyStreamResponse,
+    CapabilitiesResponse,
+    ContentItem,
+    Finding,
+    FindingSpan,
+    OutputItem,
+    SessionFinalizeResponse,
+    SessionState,
+    StreamChunk,
+    TimingInfo,
+    UsageInfo,
 )
 from app.policy import PolicyResolver
 from app.settings import settings
@@ -43,38 +46,124 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="Guardrails Service", version="0.3.0")
+app = FastAPI(title="Guardrails Service", version="0.4.0")
+
+_SUPPORTED_SOURCES = ["INPUT", "OUTPUT", "TOOL_INPUT", "TOOL_OUTPUT", "RETRIEVAL"]
+_SUPPORTED_ACTIONS = ["NONE", "MASKED", "BLOCKED", "FLAGGED"]
+_SUPPORTED_TRANSFORMS = ["reversible_mask"]
+_SUPPORTED_TRANSFORM_MODES = ["DEIDENTIFY", "REIDENTIFY"]
+_SUPPORTED_OUTPUT_SCOPES = ["INTERVENTIONS", "FULL"]
+_SUPPORTED_TRACE_LEVELS = ["NONE", "BASIC", "FULL"]
 
 
-def _to_inputs(items) -> list[TextInput]:
+def _to_inputs(items: list[ContentItem]) -> list[TextInput]:
     return [TextInput(id=item.id, text=item.text) for item in items]
 
 
-def _to_detection_items(detections) -> list[DetectionItem]:
-    output: list[DetectionItem] = []
-    for item in detections:
-        metadata = item.metadata or {}
-        output.append(
-            DetectionItem(
-                start=item.start,
-                end=item.end,
-                label=item.label,
-                score=item.score,
-                detector=item.detector,
-                snippet=item.text,
-                entity_type=(str(metadata.get("entity_type")) if metadata.get("entity_type") else None),
-                canonical_label=(
-                    str(metadata.get("canonical_label")) if metadata.get("canonical_label") else None
-                ),
+def _score_to_severity(score: float) -> str:
+    if score >= 0.95:
+        return "critical"
+    if score >= 0.85:
+        return "high"
+    if score >= 0.65:
+        return "medium"
+    return "low"
+
+
+def _findings_from_result_items(
+    *,
+    items: list[Any],
+    output_scope: str,
+) -> list[Finding]:
+    findings: list[Finding] = []
+    for item in items:
+        for detection in item.detections:
+            metadata = detection.metadata or {}
+            evidence: dict[str, Any] = {}
+            if output_scope == "FULL":
+                evidence = {
+                    "item_id": item.id,
+                    "entity_type": metadata.get("entity_type"),
+                    "canonical_label": metadata.get("canonical_label"),
+                    "detector": detection.detector,
+                    "metadata": metadata,
+                }
+            findings.append(
+                Finding(
+                    check_id=str(detection.detector or "unknown"),
+                    category=str(metadata.get("canonical_label") or detection.label.lower()),
+                    severity=_score_to_severity(float(detection.score)),
+                    confidence=float(detection.score),
+                    spans=[
+                        FindingSpan(
+                            start=int(detection.start),
+                            end=int(detection.end),
+                            snippet=str(detection.text),
+                            label=str(detection.label),
+                        )
+                    ],
+                    evidence=evidence,
+                )
             )
-        )
-    return output
+    return findings
+
+
+def _missing_session_finding(session_id: str) -> Finding:
+    return Finding(
+        check_id="reversible_mask_session",
+        category="session",
+        severity="high",
+        confidence=1.0,
+        spans=[],
+        evidence={
+            "reason": "missing_or_expired_session",
+            "session_id": session_id,
+        },
+    )
+
+
+def _usage_from_io(input_content: list[ContentItem], output_items: list[OutputItem]) -> UsageInfo:
+    return UsageInfo(
+        input_items=len(input_content),
+        input_chars=sum(len(item.text) for item in input_content),
+        output_items=len(output_items),
+        output_chars=sum(len(item.text) for item in output_items),
+    )
+
+
+def _timings_from_result_items(*, started_at: float, items: list[Any]) -> TimingInfo:
+    detector_timing_ms: dict[str, float] = {}
+    for item in items:
+        diagnostics = item.diagnostics or {}
+        detector_map = diagnostics.get("detector_timing_ms", {})
+        if isinstance(detector_map, dict):
+            for key, value in detector_map.items():
+                detector_timing_ms[str(key)] = detector_timing_ms.get(str(key), 0.0) + float(value)
+    return TimingInfo(
+        total_ms=round((perf_counter() - started_at) * 1000.0, 3),
+        detector_timing_ms={key: round(value, 3) for key, value in detector_timing_ms.items()},
+    )
+
+
+def _timings_from_elapsed_ms(*, started_at: float) -> TimingInfo:
+    return TimingInfo(total_ms=round((perf_counter() - started_at) * 1000.0, 3), detector_timing_ms={})
+
+
+def _session_state(*, session_id: str, ttl_seconds: int) -> SessionState:
+    expires_at = (datetime.now(tz=UTC) + timedelta(seconds=ttl_seconds)).isoformat()
+    return SessionState(id=session_id, ttl_seconds=ttl_seconds, expires_at=expires_at)
+
+
+def _resolve_policy_name(policy_id: str | None) -> str:
+    resolved_name, _ = app.state.policy_resolver.resolve_policy(policy_name=policy_id)
+    return resolved_name
 
 
 def _load_runtime() -> None:
     config = load_policy_config(settings.policy_path)
     resolver = PolicyResolver(config)
     analysis_service = PresidioAnalysisService(config)
+    app.state.policy_config = config
     app.state.policy_resolver = resolver
     app.state.analysis_service = analysis_service
     app.state.guardrails = GuardrailsService(
@@ -103,9 +192,20 @@ async def shutdown() -> None:
     await app.state.redis.aclose()
 
 
-@app.get("/health")
-async def health() -> dict[str, str]:
+@app.get("/healthz")
+async def healthz() -> dict[str, str]:
     return {"status": "ok"}
+
+
+@app.get("/readyz")
+async def readyz() -> dict[str, str]:
+    try:
+        pong = await app.state.redis.ping()
+        if not pong:
+            raise RuntimeError("redis ping returned false")
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"not ready: {exc}") from exc
+    return {"status": "ready"}
 
 
 @app.post("/admin/reload")
@@ -121,130 +221,256 @@ async def reload_policy() -> dict[str, Any]:
     }
 
 
-@app.get("/v1/guardrails/policies", response_model=PolicyListResponse)
-async def list_policies() -> PolicyListResponse:
-    return PolicyListResponse(
-        default_policy=app.state.policy_resolver.config.default_policy,
+@app.get("/v1/guardrails/capabilities", response_model=CapabilitiesResponse)
+async def capabilities_endpoint() -> CapabilitiesResponse:
+    config = app.state.policy_resolver.config
+    return CapabilitiesResponse(
+        service=settings.service_name,
+        api_version="v1",
+        sources=_SUPPORTED_SOURCES,
+        actions=_SUPPORTED_ACTIONS,
+        transforms=_SUPPORTED_TRANSFORMS,
+        transform_modes=_SUPPORTED_TRANSFORM_MODES,
+        output_scopes=_SUPPORTED_OUTPUT_SCOPES,
+        trace_levels=_SUPPORTED_TRACE_LEVELS,
         policies=app.state.policy_resolver.list_policies(),
+        checks=sorted(config.recognizer_definitions.keys()),
+        runtime_mode=settings.runtime_mode,
     )
 
 
-@app.post("/v1/guardrails/detect", response_model=DetectResponse)
-async def detect_endpoint(request: DetectRequest) -> DetectResponse:
+@app.post("/v1/guardrails/apply", response_model=ApplyResponse)
+async def apply_endpoint(request: ApplyRequest) -> ApplyResponse:
+    started_at = perf_counter()
     try:
-        result = await app.state.guardrails.detect_items(
-            items=_to_inputs(request.items),
-            policy_name=request.policy_name,
-        )
+        policy_name, policy = app.state.policy_resolver.resolve_policy(policy_name=request.policy_id)
     except KeyError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    return DetectResponse(
-        policy_name=result.policy_name,
-        mode=result.mode,
-        findings_count=result.findings_count,
-        items=[
-            DetectResultItem(
-                id=item.id,
-                detections=_to_detection_items(item.detections),
-                diagnostics=item.diagnostics,
-            )
-            for item in result.items
-        ],
-    )
+    transforms = request.transforms
+    if len(transforms) > 1:
+        raise HTTPException(status_code=400, detail="only one transform is supported per request")
 
+    content_inputs = _to_inputs(request.content)
+    output_items: list[OutputItem] = [OutputItem(id=item.id, text=item.text) for item in request.content]
 
-@app.post("/v1/guardrails/mask", response_model=MaskResponse)
-async def mask_endpoint(request: MaskRequest) -> MaskResponse:
-    try:
-        result = await app.state.guardrails.mask_items(
-            request_id=request.request_id,
-            items=_to_inputs(request.items),
-            policy_name=request.policy_name,
-            store_context=request.store_context,
+    if not transforms:
+        result = await app.state.guardrails.detect_items(items=content_inputs, policy_name=policy_name)
+        findings = _findings_from_result_items(items=result.items, output_scope=request.output_scope)
+        action: ActionType = "FLAGGED" if findings else "NONE"
+        return ApplyResponse(
+            action=action,
+            source=request.source,
+            policy_id=result.policy_name,
+            policy_version=request.policy_version,
+            outputs=output_items,
+            findings=findings,
+            session=None,
+            usage=_usage_from_io(request.content, output_items),
+            timings=_timings_from_result_items(started_at=started_at, items=result.items),
         )
+
+    transform = transforms[0]
+
+    if transform.mode == "DEIDENTIFY":
+        session_id = transform.session.id or f"sess_{uuid4().hex}"
+        session_ttl_seconds = int(transform.session.ttl_seconds or policy.storage_ttl_seconds)
+        try:
+            masked = await app.state.guardrails.mask_items(
+                request_id=session_id,
+                items=content_inputs,
+                policy_name=policy_name,
+                store_context=True,
+                storage_ttl_seconds=session_ttl_seconds,
+            )
+        except GuardrailsBlockedError:
+            detected = await app.state.guardrails.detect_items(items=content_inputs, policy_name=policy_name)
+            findings = _findings_from_result_items(items=detected.items, output_scope=request.output_scope)
+            return ApplyResponse(
+                action="BLOCKED",
+                source=request.source,
+                policy_id=detected.policy_name,
+                policy_version=request.policy_version,
+                outputs=[],
+                findings=findings,
+                session=None,
+                usage=UsageInfo(
+                    input_items=len(request.content),
+                    input_chars=sum(len(item.text) for item in request.content),
+                    output_items=0,
+                    output_chars=0,
+                ),
+                timings=_timings_from_result_items(started_at=started_at, items=detected.items),
+            )
+        except GuardrailsError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        findings = _findings_from_result_items(items=masked.items, output_scope=request.output_scope)
+        output_items = [OutputItem(id=item.id, text=item.text) for item in masked.items]
+        action = "MASKED" if masked.placeholders_count > 0 else "NONE"
+        return ApplyResponse(
+            action=action,
+            source=request.source,
+            policy_id=masked.policy_name,
+            policy_version=request.policy_version,
+            outputs=output_items,
+            findings=findings,
+            session=_session_state(session_id=session_id, ttl_seconds=session_ttl_seconds),
+            usage=_usage_from_io(request.content, output_items),
+            timings=_timings_from_result_items(started_at=started_at, items=masked.items),
+        )
+
+    if transform.mode == "REIDENTIFY":
+        session_id = transform.session.id
+        if not session_id:
+            raise HTTPException(status_code=400, detail="REIDENTIFY requires transforms[0].session.id")
+        allow_missing_context = (
+            transform.session.allow_missing_context
+            if transform.session.allow_missing_context is not None
+            else settings.allow_missing_reidentify_session
+        )
+        try:
+            unmasked = await app.state.guardrails.unmask_items(
+                request_id=session_id,
+                items=content_inputs,
+                delete_context=False,
+                allow_missing_context=allow_missing_context,
+            )
+        except GuardrailsNotFoundError:
+            findings = [_missing_session_finding(session_id)]
+            return ApplyResponse(
+                action="BLOCKED",
+                source=request.source,
+                policy_id=policy_name,
+                policy_version=request.policy_version,
+                outputs=[],
+                findings=findings,
+                session=None,
+                usage=UsageInfo(
+                    input_items=len(request.content),
+                    input_chars=sum(len(item.text) for item in request.content),
+                    output_items=0,
+                    output_chars=0,
+                ),
+                timings=_timings_from_elapsed_ms(started_at=started_at),
+            )
+
+        if not unmasked.context_found:
+            findings = [_missing_session_finding(session_id)]
+            return ApplyResponse(
+                action="FLAGGED",
+                source=request.source,
+                policy_id=policy_name,
+                policy_version=request.policy_version,
+                outputs=output_items,
+                findings=findings,
+                session=None,
+                usage=_usage_from_io(request.content, output_items),
+                timings=_timings_from_elapsed_ms(started_at=started_at),
+            )
+
+        output_items = [OutputItem(id=item.id, text=item.text) for item in unmasked.items]
+        return ApplyResponse(
+            action="MASKED" if unmasked.replacements > 0 else "NONE",
+            source=request.source,
+            policy_id=policy_name,
+            policy_version=request.policy_version,
+            outputs=output_items,
+            findings=[],
+            session=None,
+            usage=_usage_from_io(request.content, output_items),
+            timings=_timings_from_elapsed_ms(started_at=started_at),
+        )
+
+    raise HTTPException(status_code=400, detail=f"unsupported transform mode: {transform.mode}")
+
+
+@app.post("/v1/guardrails/apply-stream", response_model=ApplyStreamResponse)
+async def apply_stream_endpoint(request: ApplyStreamRequest) -> ApplyStreamResponse:
+    started_at = perf_counter()
+    try:
+        policy_name = _resolve_policy_name(request.policy_id)
     except KeyError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    except GuardrailsBlockedError as exc:
-        raise HTTPException(
-            status_code=403,
-            detail={"message": str(exc), "findings_count": exc.findings_count},
-        ) from exc
-    except GuardrailsError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    return MaskResponse(
-        request_id=result.request_id,
-        policy_name=result.policy_name,
-        mode=result.mode,
-        findings_count=result.findings_count,
-        placeholders_count=result.placeholders_count,
-        context_stored=result.context_stored,
-        items=[
-            MaskResultItem(
-                id=item.id,
-                text=item.text,
-                detections=_to_detection_items(item.detections),
-                diagnostics=item.diagnostics,
-            )
-            for item in result.items
-        ],
+    transforms = request.transforms
+    if len(transforms) != 1:
+        raise HTTPException(status_code=400, detail="apply-stream requires exactly one transform")
+    transform = transforms[0]
+    if transform.mode != "REIDENTIFY":
+        raise HTTPException(status_code=400, detail="apply-stream supports only REIDENTIFY transform")
+
+    session_id = transform.session.id
+    if not session_id:
+        raise HTTPException(status_code=400, detail="REIDENTIFY requires transforms[0].session.id")
+
+    allow_missing_context = (
+        transform.session.allow_missing_context
+        if transform.session.allow_missing_context is not None
+        else settings.allow_missing_reidentify_session
     )
 
-
-@app.post("/v1/guardrails/unmask", response_model=UnmaskResponse)
-async def unmask_endpoint(request: UnmaskRequest) -> UnmaskResponse:
-    try:
-        result = await app.state.guardrails.unmask_items(
-            request_id=request.request_id,
-            items=_to_inputs(request.items),
-            delete_context=request.delete_context,
-            allow_missing_context=request.allow_missing_context,
-        )
-    except GuardrailsNotFoundError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-
-    return UnmaskResponse(
-        request_id=result.request_id,
-        context_found=result.context_found,
-        replacements=result.replacements,
-        context_deleted=result.context_deleted,
-        items=[
-            UnmaskResultItem(id=item.id, text=item.text, replacements=item.replacements)
-            for item in result.items
-        ],
-    )
-
-
-@app.post("/v1/guardrails/unmask-stream", response_model=StreamUnmaskResponse)
-async def unmask_stream_endpoint(request: StreamUnmaskRequest) -> StreamUnmaskResponse:
     try:
         result = await app.state.guardrails.unmask_stream_chunk(
-            request_id=request.request_id,
-            stream_id=request.stream_id,
-            chunk=request.chunk,
-            final=request.final,
-            delete_context=request.delete_context,
-            allow_missing_context=request.allow_missing_context,
+            request_id=session_id,
+            stream_id=request.stream.id,
+            chunk=request.stream.chunk,
+            final=request.stream.final,
+            delete_context=False,
+            allow_missing_context=allow_missing_context,
         )
-    except GuardrailsNotFoundError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except GuardrailsNotFoundError:
+        findings = [_missing_session_finding(session_id)]
+        return ApplyStreamResponse(
+            action="BLOCKED",
+            source=request.source,
+            policy_id=policy_name,
+            policy_version=request.policy_version,
+            stream=StreamChunk(id=request.stream.id, chunk=request.stream.chunk, final=request.stream.final),
+            output_chunk="",
+            replacements=0,
+            buffered_chars=0,
+            findings=findings,
+            session=None,
+            usage=UsageInfo(input_items=1, input_chars=len(request.stream.chunk), output_items=0, output_chars=0),
+            timings=_timings_from_elapsed_ms(started_at=started_at),
+        )
     except GuardrailsError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    return StreamUnmaskResponse(
-        request_id=result.request_id,
-        stream_id=result.stream_id,
-        context_found=result.context_found,
-        output=result.output,
+    action: ActionType = "NONE"
+    findings: list[Finding] = []
+    if not result.context_found:
+        findings = [_missing_session_finding(session_id)]
+        action = "FLAGGED"
+    elif result.replacements > 0:
+        action = "MASKED"
+
+    output_chunk = result.output
+    output_chars = len(output_chunk)
+    output_items = 1 if output_chunk else 0
+    return ApplyStreamResponse(
+        action=action,
+        source=request.source,
+        policy_id=policy_name,
+        policy_version=request.policy_version,
+        stream=StreamChunk(id=request.stream.id, chunk=request.stream.chunk, final=request.stream.final),
+        output_chunk=output_chunk,
         replacements=result.replacements,
         buffered_chars=result.buffered_chars,
-        final=result.final,
-        context_deleted=result.context_deleted,
+        findings=findings,
+        session=None,
+        usage=UsageInfo(
+            input_items=1,
+            input_chars=len(request.stream.chunk),
+            output_items=output_items,
+            output_chars=output_chars,
+        ),
+        timings=_timings_from_elapsed_ms(started_at=started_at),
     )
 
 
-@app.post("/v1/guardrails/finalize", response_model=FinalizeResponse)
-async def finalize_endpoint(request: FinalizeRequest) -> FinalizeResponse:
-    context_deleted = await app.state.guardrails.finalize_request(request_id=request.request_id)
-    return FinalizeResponse(request_id=request.request_id, context_deleted=context_deleted)
+@app.post("/v1/guardrails/sessions/{session_id}/finalize", response_model=SessionFinalizeResponse)
+async def finalize_session_endpoint(session_id: str) -> SessionFinalizeResponse:
+    deleted = await app.state.guardrails.finalize_request(request_id=session_id)
+    return SessionFinalizeResponse(session_id=session_id, context_deleted=deleted)

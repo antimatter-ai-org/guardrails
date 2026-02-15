@@ -25,6 +25,7 @@ class Settings(BaseSettings):
     pytriton_url: str = "localhost:8000"
     pytriton_init_timeout_s: float = 20.0
     pytriton_infer_timeout_s: float = 30.0
+    allow_missing_reidentify_session: bool = False
 
 
 settings = Settings()
