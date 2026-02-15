@@ -253,6 +253,8 @@ class TokenClassifierPresidioRecognizer(EntityRecognizer):
         threshold: float,
         labels: list[str],
         label_mapping: dict[str, str] | None = None,
+        raw_label_thresholds: dict[str, float] | None = None,
+        entity_thresholds: dict[str, float] | None = None,
         aggregation_strategy: str = "simple",
         triton_model_name: str = "nemotron",
         chunking: dict[str, Any] | None = None,
@@ -263,6 +265,16 @@ class TokenClassifierPresidioRecognizer(EntityRecognizer):
             str(key).strip().lower(): _normalize_entity_type(str(value))
             for key, value in (label_mapping or {}).items()
             if str(key).strip() and str(value).strip()
+        }
+        self._raw_label_thresholds = {
+            str(key).strip().lower(): float(value)
+            for key, value in (raw_label_thresholds or {}).items()
+            if str(key).strip()
+        }
+        self._entity_thresholds = {
+            _normalize_entity_type(str(key)): float(value)
+            for key, value in (entity_thresholds or {}).items()
+            if str(key).strip()
         }
         self._runtime = build_token_classifier_runtime(
             runtime_mode=settings.runtime_mode,
@@ -318,6 +330,9 @@ class TokenClassifierPresidioRecognizer(EntityRecognizer):
             label = str(item.get("label", ""))
             if not label:
                 continue
+            normalized_raw = label.strip().lower()
+            if normalized_raw.startswith("b-") or normalized_raw.startswith("i-"):
+                normalized_raw = normalized_raw[2:]
             entity_type = self._map_label(label)
             if entities and entity_type not in entities:
                 continue
@@ -326,6 +341,12 @@ class TokenClassifierPresidioRecognizer(EntityRecognizer):
             if end <= start:
                 continue
             score = float(item.get("score", self._threshold))
+            min_score = self._entity_thresholds.get(
+                entity_type,
+                self._raw_label_thresholds.get(normalized_raw, self._threshold),
+            )
+            if score < min_score:
+                continue
             results.append(
                 RecognizerResult(
                     entity_type=entity_type,
@@ -545,6 +566,8 @@ def _build_token_classifier_recognizers(
     labels = [str(item) for item in params.get("labels", [])]
     raw_mapping = params.get("label_mapping", {})
     label_mapping = raw_mapping if isinstance(raw_mapping, dict) else {}
+    raw_label_thresholds = params.get("raw_label_thresholds", {})
+    entity_thresholds = params.get("entity_thresholds", {})
     chunking = params.get("chunking", {})
     return [
         TokenClassifierPresidioRecognizer(
@@ -554,6 +577,8 @@ def _build_token_classifier_recognizers(
             threshold=threshold,
             labels=labels,
             label_mapping=label_mapping,
+            raw_label_thresholds=raw_label_thresholds if isinstance(raw_label_thresholds, dict) else {},
+            entity_thresholds=entity_thresholds if isinstance(entity_thresholds, dict) else {},
             aggregation_strategy=aggregation_strategy,
             triton_model_name=triton_model_name,
             chunking=chunking if isinstance(chunking, dict) else {},

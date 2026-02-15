@@ -199,11 +199,9 @@ Raw model labels (BIO collapsed to entity group):
 - `date`
 - `document_number`
 - `email`
-- `first_name`, `last_name`, `middle_name`, `name`, `name_initials`, `nickname`
 - `ip`
 - `military_individual_number`
 - `mobile_phone`
-- `organization`
 - `snils`
 - `tin`
 - `vehicle_number`
@@ -213,11 +211,13 @@ Configured mapping to normalized entities:
 - `DATE_TIME`
 - `DOCUMENT_NUMBER`
 - `EMAIL_ADDRESS`
-- `PERSON`
 - `IP_ADDRESS`
 - `PHONE_NUMBER`
-- `ORGANIZATION`
 - `TIN`
+
+Policy notes:
+- Nemotron is configured with a structured-label allowlist (name/org labels are intentionally excluded).
+- Per-entity minimum confidence thresholds are applied in recognizer postprocessing (`entity_thresholds` / `raw_label_thresholds`).
 
 Examples:
 - `Проживает: г. Казань, ул. Пушкина 12` -> `LOCATION`
