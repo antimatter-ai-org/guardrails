@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -26,16 +25,6 @@ class Settings(BaseSettings):
     pytriton_init_timeout_s: float = 20.0
     pytriton_infer_timeout_s: float = 30.0
     pytriton_model_name: str = "gliner"
-
-    @field_validator("runtime_mode", mode="before")
-    @classmethod
-    def _normalize_runtime_mode(cls, value: str | None) -> str | None:
-        if value is None:
-            return value
-        normalized = str(value).strip().lower()
-        if normalized == "gpu":
-            return "cuda"
-        return normalized
 
 
 settings = Settings()

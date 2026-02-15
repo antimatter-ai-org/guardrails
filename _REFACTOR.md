@@ -6,6 +6,55 @@ Status: Draft ready for staged implementation
 
 ## Execution Log
 
+### 2026-02-15 - Architecture Simplification Plan Implemented
+
+Status: completed
+
+Implemented:
+
+1. Removed legacy/unused code paths:
+   1. Deleted legacy detector stack (`app/detectors/*`).
+   2. Deleted legacy masking stack (`app/masking/*`).
+   3. Deleted related unit tests for removed legacy modules.
+2. Simplified analysis architecture:
+   1. Kept single Presidio recognizer pipeline.
+   2. Removed alternate analyzer-engine/NLP-engine branches.
+   3. Removed `hf_token_classifier` recognizer type.
+3. Simplified config surface:
+   1. Trimmed `AnalysisConfig` to recognizer list only.
+   2. Removed optional fields that were not used in production (`backend`, `nlp_engine`, `nlp_models`, `use_builtin_recognizers`, `thresholds`, `label_mapping`).
+   3. Updated `configs/policy.yaml` accordingly.
+4. Simplified offline model asset workflow:
+   1. Removed Natasha/HF-token-classifier model asset helpers.
+   2. Kept only GLiNER model resolution and offline cache env setup.
+   3. Simplified download command to fetch only policy-required GLiNER models.
+5. Runtime cleanup:
+   1. Kept project-level `cpu|cuda` mode only.
+   2. Removed legacy `gpu` alias acceptance path.
+6. Evaluation harness simplification:
+   1. Rewrote `app.eval.run` to baseline-only flow.
+   2. Kept dataset cache, synthetic split generation/cache, and progress reporting.
+   3. Removed cascade/matrix/ablation/resume/manifest tooling and code paths.
+7. Removed fine-tuning surface:
+   1. Deleted `app/finetune/*`.
+   2. Deleted finetune tools and finetune docs.
+   3. Removed finetune optional dependency section.
+8. Documentation and developer UX refresh:
+   1. Rewrote `README.md` to match current architecture.
+   2. Rewrote `docs/EVALUATION.md` to reflect current evaluator only.
+   3. Updated `docs/DETECTORS.md` and removed stale recognizer docs.
+   4. Simplified `Makefile` targets to current supported workflows.
+
+Results:
+
+1. Unit test suite after refactor: `66 passed`.
+2. Dependency lock refreshed: `uv lock` completed successfully.
+3. Final code surface matches current product scope:
+   1. service APIs for masking/unmasking (including streaming),
+   2. CPU/CUDA runtime support with PyTriton on CUDA and MPS-capable CPU path,
+   3. air-gapped model bundle path,
+   4. manual multi-dataset evaluation with caching and synthetic test split support.
+
 ### 2026-02-15 - Stage 0 Implemented
 
 Status: completed

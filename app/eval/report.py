@@ -160,40 +160,6 @@ def render_markdown_summary(report: dict[str, Any]) -> str:
             )
             lines.append("")
 
-    cascade = report.get("evaluation", {}).get("cascade")
-    if isinstance(cascade, dict):
-        lines.append("## Cascade")
-        lines.append("")
-        lines.append(f"- Threshold: `{cascade.get('threshold')}`")
-        lines.append(f"- Escalated: `{cascade.get('escalated_samples')}` / `{report['dataset']['sample_count']}`")
-
-    warmup = report.get("evaluation", {}).get("warmup")
-    if isinstance(warmup, dict):
-        lines.append("")
-        lines.append("## Warm-up")
-        lines.append("")
-        lines.append(f"- Timeout: `{warmup.get('timeout_seconds')}`s")
-        lines.append(f"- Strict: `{warmup.get('strict')}`")
-        lines.append(f"- Failures: `{warmup.get('failures')}`")
-        recognizers = warmup.get("recognizers", [])
-        if isinstance(recognizers, list) and recognizers:
-            lines.append("")
-            lines.append("| Recognizer | Stage | Runtime | Ready | Warm-up s | Error |")
-            lines.append("|---|---|---|---:|---:|---|")
-            for item in recognizers:
-                if not isinstance(item, dict):
-                    continue
-                lines.append(
-                    "| {recognizer} | {stage} | {runtime_type} | {ready} | {warm_up_seconds:.6f} | {error} |".format(
-                        recognizer=item.get("recognizer", ""),
-                        stage=item.get("stage", ""),
-                        runtime_type=item.get("runtime_type", "n/a"),
-                        ready=str(bool(item.get("ready", False))).lower(),
-                        warm_up_seconds=float(item.get("warm_up_seconds", 0.0)),
-                        error=str(item.get("load_error") or ""),
-                    )
-                )
-
     return "\n".join(lines) + "\n"
 
 

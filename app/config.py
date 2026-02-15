@@ -10,7 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 class RecognizerDefinition(BaseModel):
     model_config = ConfigDict(extra="allow")
 
-    type: Literal["regex", "secret_regex", "phone", "ip", "gliner", "entropy", "hf_token_classifier"]
+    type: Literal["regex", "secret_regex", "phone", "ip", "gliner", "entropy"]
     enabled: bool = True
     params: dict[str, Any] = Field(default_factory=dict)
 
@@ -26,13 +26,7 @@ class LanguageConfig(BaseModel):
 class AnalysisConfig(BaseModel):
     model_config = ConfigDict(extra="allow")
 
-    backend: Literal["presidio"] = "presidio"
-    nlp_engine: Literal["none", "transformers"] = "none"
-    nlp_models: dict[str, Any] = Field(default_factory=dict)
-    use_builtin_recognizers: bool = False
     recognizers: list[str] = Field(default_factory=list)
-    thresholds: dict[str, float] = Field(default_factory=dict)
-    label_mapping: dict[str, str] = Field(default_factory=dict)
 
 
 class AnalyzerProfile(BaseModel):

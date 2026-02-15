@@ -1,21 +1,18 @@
 from __future__ import annotations
 
 import logging
-from pathlib import Path
-import regex as re
 from time import perf_counter
 from typing import Any
 
-from presidio_analyzer import AnalyzerEngine, EntityRecognizer, RecognizerRegistry, RecognizerResult
-from presidio_analyzer.nlp_engine import NlpEngineProvider
+import regex as re
+from presidio_analyzer import EntityRecognizer, RecognizerRegistry, RecognizerResult
 
-from app.config import AnalyzerProfile, PolicyConfig
+from app.config import PolicyConfig
 from app.core.analysis.language import resolve_language, resolve_languages
 from app.core.analysis.mapping import canonicalize_entity_type
 from app.core.analysis.recognizers import build_recognizer_registry
 from app.core.analysis.span_normalizer import normalize_detections
 from app.models.entities import AnalysisDiagnostics, Detection
-from app.settings import settings
 
 logger = logging.getLogger(__name__)
 
@@ -40,62 +37,17 @@ class PresidioAnalysisService:
 
     def __init__(self, policy_config: PolicyConfig) -> None:
         self._config = policy_config
-        self._engines: dict[str, AnalyzerEngine] = {}
         self._registries: dict[str, RecognizerRegistry] = {}
-
-    def _build_nlp_engine(self, profile: AnalyzerProfile) -> Any | None:
-        analysis = profile.analysis
-        if analysis.nlp_engine == "none":
-            return None
-
-        if analysis.nlp_engine != "transformers":
-            raise ValueError(f"unsupported nlp_engine: {analysis.nlp_engine}")
-
-        models = []
-        for lang, model in analysis.nlp_models.items():
-            if isinstance(model, dict):
-                model_name = model
-            else:
-                model_name = {
-                    "spacy": "en_core_web_sm" if lang == "en" else "ru_core_news_sm",
-                    "transformers": str(model),
-                }
-            if settings.offline_mode:
-                transformers_ref = model_name.get("transformers")
-                if transformers_ref and transformers_ref.startswith("/"):
-                    if not Path(transformers_ref).exists():
-                        raise FileNotFoundError(f"transformers model path not found: {transformers_ref}")
-                spacy_ref = model_name.get("spacy")
-                if spacy_ref and spacy_ref.startswith("/"):
-                    if not Path(spacy_ref).exists():
-                        raise FileNotFoundError(f"spacy model path not found: {spacy_ref}")
-            models.append(
-                {
-                    "lang_code": lang,
-                    "model_name": model_name,
-                }
-            )
-
-        provider = NlpEngineProvider(
-            nlp_configuration={
-                "nlp_engine_name": "transformers",
-                "models": models,
-            }
-        )
-        return provider.create_engine()
 
     def _build_registry(self, profile_name: str) -> RecognizerRegistry:
         profile = self._config.analyzer_profiles.get(profile_name)
         if profile is None:
             raise KeyError(f"analyzer profile not found: {profile_name}")
 
-        nlp_engine = self._build_nlp_engine(profile)
         return build_recognizer_registry(
-            use_builtin_recognizers=profile.analysis.use_builtin_recognizers,
             supported_languages=profile.language.supported,
             recognizer_ids=profile.analysis.recognizers,
             recognizer_definitions=self._config.recognizer_definitions,
-            nlp_engine=nlp_engine,
         )
 
     def _get_registry(self, profile_name: str) -> RecognizerRegistry:
@@ -106,48 +58,9 @@ class PresidioAnalysisService:
         self._registries[profile_name] = registry
         return registry
 
-    def _build_engine(self, profile_name: str) -> AnalyzerEngine:
-        profile = self._config.analyzer_profiles.get(profile_name)
-        if profile is None:
-            raise KeyError(f"analyzer profile not found: {profile_name}")
-
-        nlp_engine = self._build_nlp_engine(profile)
-        registry = build_recognizer_registry(
-            use_builtin_recognizers=profile.analysis.use_builtin_recognizers,
-            supported_languages=profile.language.supported,
-            recognizer_ids=profile.analysis.recognizers,
-            recognizer_definitions=self._config.recognizer_definitions,
-            nlp_engine=nlp_engine,
-        )
-        return AnalyzerEngine(
-            registry=registry,
-            nlp_engine=nlp_engine,
-            supported_languages=profile.language.supported,
-        )
-
-    def _get_engine(self, profile_name: str) -> AnalyzerEngine:
-        engine = self._engines.get(profile_name)
-        if engine is not None:
-            return engine
-        engine = self._build_engine(profile_name)
-        self._engines[profile_name] = engine
-        return engine
-
     @staticmethod
-    def _result_threshold(
-        result: RecognizerResult,
-        *,
-        profile: AnalyzerProfile,
-        policy_min_score: float,
-    ) -> float:
-        entity_type = result.entity_type.strip().upper()
-        default_threshold = float(profile.analysis.thresholds.get("DEFAULT", policy_min_score))
-        entity_threshold = float(profile.analysis.thresholds.get(entity_type, default_threshold))
-        return max(float(policy_min_score), entity_threshold)
-
-    @staticmethod
-    def _requires_analyzer_engine(profile: AnalyzerProfile) -> bool:
-        return bool(profile.analysis.use_builtin_recognizers or profile.analysis.nlp_engine != "none")
+    def _result_threshold(*, policy_min_score: float) -> float:
+        return float(policy_min_score)
 
     def _analyze_with_registry(
         self,
@@ -221,10 +134,6 @@ class PresidioAnalysisService:
                     value -= 9
             total += value
         return total % 10 == 0
-
-    @classmethod
-    def _is_valid_payment_card_detection(cls, *, text: str, start: int, end: int) -> bool:
-        return cls._payment_card_signal(text=text, start=start, end=end)["keep"]
 
     @classmethod
     def _payment_card_signal(cls, *, text: str, start: int, end: int) -> dict[str, Any]:
@@ -326,49 +235,23 @@ class PresidioAnalysisService:
         spans_truncated = False
 
         results_with_language: list[tuple[str, RecognizerResult]] = []
-        if self._requires_analyzer_engine(profile):
-            engine = self._get_engine(profile_name)
-            for current_language in languages:
-                if perf_counter() >= deadline:
-                    timeout_exceeded = True
-                    break
-                recognizer_name = f"analyzer_engine:{current_language}"
-                call_started = perf_counter()
-                try:
-                    results = engine.analyze(
-                        text=text,
-                        language=current_language,
-                        score_threshold=float(policy_min_score),
-                        return_decision_process=False,
-                    )
-                except Exception as exc:
-                    results = []
-                    detector_errors[recognizer_name] = str(exc)
-                    logger.warning("analyzer engine failed (%s): %s", recognizer_name, exc)
-                detector_timing_ms[recognizer_name] = (perf_counter() - call_started) * 1000.0
-                detector_span_counts[recognizer_name] = len(results)
-                if perf_counter() >= deadline:
-                    timeout_exceeded = True
-                for result in results:
-                    results_with_language.append((current_language, result))
-        else:
-            for current_language in languages:
-                if perf_counter() >= deadline:
-                    timeout_exceeded = True
-                    break
-                (
-                    results,
-                    language_timing,
-                    language_spans,
-                    language_errors,
-                    language_timeout_exceeded,
-                ) = self._analyze_with_registry(profile_name, text, current_language, deadline=deadline)
-                self._merge_float_map(detector_timing_ms, language_timing)
-                self._merge_int_map(detector_span_counts, language_spans)
-                detector_errors.update(language_errors)
-                timeout_exceeded = timeout_exceeded or language_timeout_exceeded
-                for result in results:
-                    results_with_language.append((current_language, result))
+        for current_language in languages:
+            if perf_counter() >= deadline:
+                timeout_exceeded = True
+                break
+            (
+                results,
+                language_timing,
+                language_spans,
+                language_errors,
+                language_timeout_exceeded,
+            ) = self._analyze_with_registry(profile_name, text, current_language, deadline=deadline)
+            self._merge_float_map(detector_timing_ms, language_timing)
+            self._merge_int_map(detector_span_counts, language_spans)
+            detector_errors.update(language_errors)
+            timeout_exceeded = timeout_exceeded or language_timeout_exceeded
+            for result in results:
+                results_with_language.append((current_language, result))
 
         deduped_results: list[tuple[str, RecognizerResult]] = []
         dedup_index: dict[tuple[int, int, str], int] = {}
@@ -386,7 +269,7 @@ class PresidioAnalysisService:
         detections: list[Detection] = []
         for result_language, result in deduped_results:
             entity_type = result.entity_type.strip().upper()
-            canonical = canonicalize_entity_type(entity_type, custom_mapping=profile.analysis.label_mapping)
+            canonical = canonicalize_entity_type(entity_type)
             score = float(result.score)
             card_signal: dict[str, Any] | None = None
             if canonical == "payment_card":
@@ -402,7 +285,7 @@ class PresidioAnalysisService:
                     score *= float(card_signal.get("score_multiplier", 1.0))
                 score = min(1.0, score + float(card_signal.get("score_bonus", 0.0)))
 
-            threshold = self._result_threshold(result, profile=profile, policy_min_score=policy_min_score)
+            threshold = self._result_threshold(policy_min_score=policy_min_score)
             if score < threshold:
                 continue
             metadata = dict(result.recognition_metadata or {})

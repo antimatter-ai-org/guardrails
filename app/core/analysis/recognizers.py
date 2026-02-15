@@ -1,19 +1,15 @@
 from __future__ import annotations
 
 import ipaddress
-import logging
 import math
 from collections.abc import Iterable
-from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
 from typing import Any
 
 import regex as re
 from presidio_analyzer import EntityRecognizer, Pattern, PatternRecognizer, RecognizerRegistry, RecognizerResult
 
 from app.config import RecognizerDefinition
-from app.model_assets import resolve_hf_model_source
 from app.runtime.gliner_runtime import build_gliner_runtime
-from app.runtime.torch_runtime import resolve_cpu_runtime_device
 from app.settings import settings
 
 _FLAG_MAP: dict[str, int] = {
@@ -22,7 +18,6 @@ _FLAG_MAP: dict[str, int] = {
     "DOTALL": re.DOTALL,
     "UNICODE": re.UNICODE,
 }
-logger = logging.getLogger(__name__)
 
 
 def _normalize_entity_type(label: str) -> str:
@@ -72,13 +67,11 @@ class PhoneNumberRecognizer(EntityRecognizer):
         )
 
     def load(self) -> None:
-        import phonenumbers
         from phonenumbers import Leniency, PhoneNumberMatcher, is_valid_number
 
         self._matcher_cls = PhoneNumberMatcher
         self._leniency = Leniency
         self._is_valid_number = is_valid_number
-        self._phonenumbers = phonenumbers
 
     def analyze(self, text: str, entities: list[str], nlp_artifacts: Any = None) -> list[RecognizerResult]:
         if entities and "PHONE_NUMBER" not in entities:
@@ -316,166 +309,6 @@ class EntropySecretRecognizer(EntityRecognizer):
         return results
 
 
-class HFTokenClassifierRecognizer(EntityRecognizer):
-    _DEFAULT_TIMEOUT_SECONDS = 15.0
-
-    def __init__(
-        self,
-        *,
-        name: str,
-        supported_language: str,
-        model_name: str,
-        score_threshold: float,
-        label_mapping: dict[str, str],
-        entities: list[str],
-        aggregation_strategy: str,
-        infer_timeout_seconds: float | None = None,
-    ) -> None:
-        self._model_name = model_name
-        self._score_threshold = float(score_threshold)
-        self._label_mapping = {str(key).upper(): str(value) for key, value in label_mapping.items()}
-        self._aggregation_strategy = aggregation_strategy
-        timeout_seconds = (
-            float(self._DEFAULT_TIMEOUT_SECONDS) if infer_timeout_seconds is None else float(infer_timeout_seconds)
-        )
-        self._infer_timeout_seconds = max(0.1, timeout_seconds)
-        self._pipeline: Any | None = None
-        self._load_error: str | None = None
-        normalized_entities = sorted({_normalize_entity_type(item) for item in entities if str(item).strip()})
-        super().__init__(
-            supported_entities=normalized_entities or ["PERSON", "ORGANIZATION", "LOCATION"],
-            name=name,
-            supported_language=supported_language,
-        )
-
-    @staticmethod
-    def _fallback_pipeline_kwargs(model_name: str, aggregation_strategy: str) -> dict[str, Any]:
-        return {
-            "task": "token-classification",
-            "model": model_name,
-            "tokenizer": model_name,
-            "aggregation_strategy": aggregation_strategy,
-            "device": -1,
-        }
-
-    @staticmethod
-    def _runtime_pipeline_device() -> int | str:
-        if settings.runtime_mode == "cuda":
-            logger.info(
-                "hf_token_classifier recognizer is not pytriton-backed yet; using local cpu/mps runtime path (%s)",
-                settings.cpu_device,
-            )
-        resolved = resolve_cpu_runtime_device(settings.cpu_device)
-        if resolved == "mps":
-            return "mps"
-        return -1
-
-    def load(self) -> None:
-        try:
-            from transformers import pipeline
-        except Exception as exc:
-            self._pipeline = None
-            self._load_error = f"transformers import failed: {exc}"
-            logger.warning("hf_token_classifier recognizer disabled (%s): %s", self.name, self._load_error)
-            return
-
-        kwargs = self._fallback_pipeline_kwargs(self._model_name, self._aggregation_strategy)
-        preferred_device = -1
-        try:
-            preferred_device = self._runtime_pipeline_device()
-        except Exception as exc:
-            logger.warning(
-                "hf_token_classifier recognizer runtime probe failed for %s, falling back to cpu: %s",
-                self.name,
-                exc,
-            )
-
-        if preferred_device != -1:
-            kwargs["device"] = preferred_device
-
-        try:
-            self._pipeline = pipeline(**kwargs)
-            self._load_error = None
-            return
-        except Exception as exc:
-            if preferred_device == -1:
-                self._pipeline = None
-                self._load_error = str(exc)
-                logger.warning("hf_token_classifier recognizer disabled (%s): %s", self.name, self._load_error)
-                return
-            logger.warning(
-                "hf_token_classifier recognizer failed on device %s for %s, retrying on cpu: %s",
-                preferred_device,
-                self.name,
-                exc,
-            )
-
-        try:
-            self._pipeline = pipeline(**self._fallback_pipeline_kwargs(self._model_name, self._aggregation_strategy))
-            self._load_error = None
-        except Exception as exc:
-            self._pipeline = None
-            self._load_error = str(exc)
-            logger.warning("hf_token_classifier recognizer disabled (%s): %s", self.name, self._load_error)
-
-    def analyze(self, text: str, entities: list[str], nlp_artifacts: Any = None) -> list[RecognizerResult]:
-        if self._pipeline is None:
-            return []
-
-        executor = ThreadPoolExecutor(max_workers=1)
-        future = executor.submit(self._pipeline, text)
-        cancel_futures = False
-        try:
-            outputs = future.result(timeout=self._infer_timeout_seconds)
-        except FutureTimeoutError:
-            future.cancel()
-            cancel_futures = True
-            logger.warning(
-                "hf_token_classifier inference timeout (%ss) for recognizer %s",
-                self._infer_timeout_seconds,
-                self.name,
-            )
-            return []
-        except Exception as exc:
-            cancel_futures = True
-            logger.warning("hf_token_classifier inference failed for %s: %s", self.name, exc)
-            return []
-        finally:
-            executor.shutdown(wait=False, cancel_futures=cancel_futures)
-
-        if not isinstance(outputs, list):
-            return []
-        results: list[RecognizerResult] = []
-        for item in outputs:
-            if not isinstance(item, dict):
-                continue
-            raw_label = str(item.get("entity_group") or item.get("entity") or "").strip()
-            mapped_label = self._label_mapping.get(raw_label.upper(), raw_label)
-            entity_type = _normalize_entity_type(mapped_label)
-            if entities and entity_type not in entities:
-                continue
-            score = float(item.get("score", 0.0))
-            if score < self._score_threshold:
-                continue
-            start = int(item.get("start", -1))
-            end = int(item.get("end", -1))
-            if end <= start:
-                continue
-            results.append(
-                RecognizerResult(
-                    entity_type=entity_type,
-                    start=start,
-                    end=end,
-                    score=score,
-                    recognition_metadata={
-                        RecognizerResult.RECOGNIZER_NAME_KEY: self.name,
-                        RecognizerResult.RECOGNIZER_IDENTIFIER_KEY: self.id,
-                    },
-                )
-            )
-        return results
-
-
 def _pattern_flags(pattern_def: dict[str, Any]) -> int:
     flags_value = 0
     for flag in pattern_def.get("flags", []):
@@ -609,35 +442,6 @@ def _build_recognizers_for_definition(
         return _build_ip_recognizers(recognizer_id, definition, supported_languages)
     if rec_type == "gliner":
         return _build_gliner_recognizers(recognizer_id, definition, supported_languages)
-    if rec_type == "hf_token_classifier":
-        params = definition.params
-        model_name = str(params.get("model_name", "")).strip()
-        if not model_name:
-            return []
-        model_source = resolve_hf_model_source(
-            model_name=model_name,
-            model_dir=settings.model_dir,
-            namespace="hf_token_classifier",
-            strict=settings.offline_mode,
-        )
-        label_mapping = params.get("label_mapping", {})
-        if not isinstance(label_mapping, dict):
-            label_mapping = {}
-        entities = [str(item) for item in params.get("entities", [])]
-        score_threshold = float(params.get("score_threshold", 0.5))
-        aggregation_strategy = str(params.get("aggregation_strategy", "simple"))
-        return [
-            HFTokenClassifierRecognizer(
-                name=f"{recognizer_id}:{lang}",
-                supported_language=lang,
-                model_name=model_source,
-                score_threshold=score_threshold,
-                label_mapping={str(key): str(value) for key, value in label_mapping.items()},
-                entities=entities,
-                aggregation_strategy=aggregation_strategy,
-            )
-            for lang in _iter_languages(params, supported_languages)
-        ]
     if rec_type == "entropy":
         params = definition.params
         return [
@@ -656,16 +460,11 @@ def _build_recognizers_for_definition(
 
 def build_recognizer_registry(
     *,
-    use_builtin_recognizers: bool,
     supported_languages: list[str],
     recognizer_ids: list[str],
     recognizer_definitions: dict[str, RecognizerDefinition],
-    nlp_engine: Any | None,
 ) -> RecognizerRegistry:
     registry = RecognizerRegistry()
-    if use_builtin_recognizers:
-        registry.load_predefined_recognizers(languages=supported_languages, nlp_engine=nlp_engine)
-
     for recognizer_id in recognizer_ids:
         definition = recognizer_definitions.get(recognizer_id)
         if definition is None or not definition.enabled:

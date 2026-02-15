@@ -8,37 +8,28 @@ from app.config import RecognizerDefinition
 from app.tools import download_models
 
 
-def test_collect_hf_token_classifier_models_skips_local_paths(tmp_path: Path, monkeypatch) -> None:
-    local_model_dir = tmp_path / "local-model"
-    local_model_dir.mkdir(parents=True)
-
+def test_collect_gliner_models_from_policy(monkeypatch) -> None:
     config = SimpleNamespace(
         recognizer_definitions={
-            "remote_model": RecognizerDefinition(
-                type="hf_token_classifier",
+            "g1": RecognizerDefinition(
+                type="gliner",
                 enabled=True,
-                params={"model_name": "dslim/bert-base-NER"},
+                params={"model_name": "urchade/gliner_multi-v2.1"},
             ),
-            "local_model": RecognizerDefinition(
-                type="hf_token_classifier",
+            "g2": RecognizerDefinition(
+                type="gliner",
                 enabled=True,
-                params={"model_name": str(local_model_dir)},
+                params={"model_name": "my-org/gliner-ru"},
             ),
-            "regex_model": RecognizerDefinition(type="regex", enabled=True, params={"patterns": []}),
+            "regex": RecognizerDefinition(type="regex", enabled=True, params={"patterns": []}),
         }
     )
-
     monkeypatch.setattr(download_models, "load_policy_config", lambda _: config)
-
-    collected = download_models._collect_hf_token_classifier_models("unused")
-
-    assert collected == ["dslim/bert-base-NER"]
+    assert download_models._collect_gliner_models("unused") == ["my-org/gliner-ru", "urchade/gliner_multi-v2.1"]
 
 
-def test_download_models_run_writes_token_classifier_manifest(tmp_path: Path, monkeypatch) -> None:
+def test_download_models_run_writes_manifest(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setattr(download_models, "_collect_gliner_models", lambda _: ["urchade/gliner_multi-v2.1"])
-    monkeypatch.setattr(download_models, "_collect_transformer_models", lambda _: [])
-    monkeypatch.setattr(download_models, "_collect_hf_token_classifier_models", lambda _: ["dslim/bert-base-NER"])
     monkeypatch.setattr(download_models, "apply_model_env", lambda **_: None)
 
     def fake_download(*, output_dir: str, model_name: str, namespace: str) -> str:
@@ -53,9 +44,9 @@ def test_download_models_run_writes_token_classifier_manifest(tmp_path: Path, mo
 
     assert exit_code == 0
     manifest = json.loads((tmp_path / "manifest.json").read_text(encoding="utf-8"))
-    assert manifest["hf_token_classifier_models"] == {
-        "dslim/bert-base-NER": str(tmp_path / "hf_token_classifier" / "dslim__bert-base-NER")
+    assert manifest["gliner_models"] == {
+        "urchade/gliner_multi-v2.1": str(tmp_path / "gliner" / "urchade__gliner_multi-v2.1")
     }
-    checksums = manifest["checksums"]["hf_token_classifier_models"]["dslim/bert-base-NER"]
+    checksums = manifest["checksums"]["gliner_models"]["urchade/gliner_multi-v2.1"]
     assert checksums["files"] == 1
     assert len(str(checksums["sha256_tree"])) == 64

@@ -22,39 +22,6 @@ def _collect_gliner_models(policy_path: str) -> list[str]:
     return sorted(models)
 
 
-def _collect_transformer_models(policy_path: str) -> list[str]:
-    config = load_policy_config(policy_path)
-    models: set[str] = set()
-    for profile in config.analyzer_profiles.values():
-        analysis = profile.analysis
-        if analysis.nlp_engine != "transformers":
-            continue
-        for model_ref in analysis.nlp_models.values():
-            if isinstance(model_ref, dict):
-                candidate = str(model_ref.get("transformers", "")).strip()
-            else:
-                candidate = str(model_ref).strip()
-            if candidate and not candidate.startswith("/"):
-                models.add(candidate)
-    return sorted(models)
-
-
-def _collect_hf_token_classifier_models(policy_path: str) -> list[str]:
-    config = load_policy_config(policy_path)
-    models: set[str] = set()
-    for definition in config.recognizer_definitions.values():
-        if definition.type.lower() != "hf_token_classifier":
-            continue
-        model_name = str(definition.params.get("model_name", "")).strip()
-        if not model_name:
-            continue
-        local_path = Path(model_name).expanduser()
-        if local_path.is_absolute() or local_path.exists():
-            continue
-        models.add(model_name)
-    return sorted(models)
-
-
 def _download_hf_model(*, output_dir: str, model_name: str, namespace: str) -> str:
     try:
         from huggingface_hub import snapshot_download
@@ -123,8 +90,6 @@ def run(output_dir: str, policy_path: str, extra_gliner_models: list[str]) -> in
     apply_model_env(model_dir=str(root), offline_mode=False)
 
     gliner_models = sorted(set(_collect_gliner_models(policy_path) + extra_gliner_models))
-    transformer_models = _collect_transformer_models(policy_path)
-    token_classifier_models = _collect_hf_token_classifier_models(policy_path)
 
     downloaded_gliner: dict[str, str] = {}
     for model_name in gliner_models:
@@ -132,28 +97,12 @@ def run(output_dir: str, policy_path: str, extra_gliner_models: list[str]) -> in
         downloaded_gliner[model_name] = local_path
         print(f"[ok] GLiNER model: {model_name} -> {local_path}")
 
-    downloaded_transformers: dict[str, str] = {}
-    for model_name in transformer_models:
-        local_path = _download_hf_model(output_dir=str(root), model_name=model_name, namespace="transformers")
-        downloaded_transformers[model_name] = local_path
-        print(f"[ok] Transformers model: {model_name} -> {local_path}")
-
-    downloaded_token_classifiers: dict[str, str] = {}
-    for model_name in token_classifier_models:
-        local_path = _download_hf_model(output_dir=str(root), model_name=model_name, namespace="hf_token_classifier")
-        downloaded_token_classifiers[model_name] = local_path
-        print(f"[ok] HF token classifier model: {model_name} -> {local_path}")
-
     manifest = {
         "generated_at_utc": datetime.now(tz=UTC).isoformat(),
         "policy_path": str(Path(policy_path).resolve()),
         "gliner_models": downloaded_gliner,
-        "transformers_models": downloaded_transformers,
-        "hf_token_classifier_models": downloaded_token_classifiers,
         "checksums": {
             "gliner_models": _artifact_checksums(downloaded_gliner),
-            "transformers_models": _artifact_checksums(downloaded_transformers),
-            "hf_token_classifier_models": _artifact_checksums(downloaded_token_classifiers),
         },
     }
     manifest_path = root / "manifest.json"

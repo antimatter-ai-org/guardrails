@@ -303,8 +303,6 @@ def build_gliner_runtime(
     chunking_boundary_lookback_tokens: int = 24,
 ) -> GlinerRuntime:
     mode = runtime_mode.strip().lower()
-    if mode == "gpu":
-        mode = "cuda"
     chunking = GlinerChunkingConfig(
         enabled=chunking_enabled,
         max_tokens=chunking_max_tokens,

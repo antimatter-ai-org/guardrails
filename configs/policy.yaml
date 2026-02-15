@@ -29,9 +29,6 @@ analyzer_profiles:
       supported: ["ru", "en"]
       detection: auto
     analysis:
-      backend: presidio
-      nlp_engine: none
-      use_builtin_recognizers: false
       recognizers:
         - phone_number_lib
         - ip_address_lib
@@ -50,9 +47,6 @@ analyzer_profiles:
       supported: ["ru", "en"]
       detection: auto
     analysis:
-      backend: presidio
-      nlp_engine: none
-      use_builtin_recognizers: false
       recognizers:
         - phone_number_lib
         - ip_address_lib
@@ -70,9 +64,6 @@ analyzer_profiles:
       supported: ["ru", "en"]
       detection: hint_only
     analysis:
-      backend: presidio
-      nlp_engine: none
-      use_builtin_recognizers: false
       recognizers: []
 
 recognizer_definitions:
