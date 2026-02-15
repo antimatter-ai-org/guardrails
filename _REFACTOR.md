@@ -1,0 +1,587 @@
+# Guardrails Performance Refactor Plan
+
+Date: 2026-02-15
+Owner: Guardrails team
+Status: Draft ready for staged implementation
+
+## 1. Why this refactor
+
+Primary goal: materially improve real-world leakage prevention quality while keeping masking/unmasking behavior stable and production-safe.
+
+Current evidence shows three dominant issues:
+
+1. Boundary quality is poor on one large dataset.
+2. Identifier recall is too low.
+3. Some recognizers produce high false-positive volume in mixed-language text.
+
+The plan below is intentionally staged so each step can be implemented, validated, and reverted independently.
+
+## 2. Baseline and target outcomes
+
+Baseline snapshot (latest full multi-dataset run on GPU host):
+
+1. Combined exact canonical F1: 0.2364
+2. Combined overlap canonical F1: 0.6984
+3. Scanpatch exact F1: 0.5906
+4. Rubai exact F1: 0.2220
+5. Worst exact labels: `location`, `identifier`
+6. Largest FP contributors: `gliner_pii_multilingual:*`, `en_pii_regex:PHONE_NUMBER:*`
+
+Target outcomes after all stages:
+
+1. Improve combined exact canonical F1 by at least +0.12 absolute without reducing overlap canonical F1 by more than 0.03.
+2. Improve `identifier` exact recall by at least +0.15 absolute.
+3. Improve `location` exact F1 by at least +0.08 absolute.
+4. Add leakage-centric metrics so evaluation is not dependent only on exact boundary matching.
+5. Make evaluation runs deterministic, including model warm-up readiness.
+
+## 3. Hard constraints
+
+1. No backward compatibility required for API/schema in this project.
+2. Air-gapped mode must remain supported.
+3. Runtime switch remains project-level (`cpu` or `cuda`).
+4. `cuda` path continues to use PyTriton.
+5. CPU path must keep Apple Silicon/MPS behavior.
+
+## 4. Refactor strategy overview
+
+Execution order:
+
+1. Stabilize evaluation correctness and runtime readiness.
+2. Improve detection quality with post-processing and calibration.
+3. Add new detector logic for known misses.
+4. Expand metrics and analysis tooling.
+5. Optional major model layer additions.
+
+Each stage below includes:
+
+1. Scope
+2. Concrete tasks
+3. Code touchpoints
+4. Tests
+5. Exit criteria
+
+---
+
+## Stage 0: Baseline Freeze and Experiment Harness
+
+### Scope
+
+Create a clean baseline artifact set and a repeatable experiment harness so every next stage is measured apples-to-apples.
+
+### Tasks
+
+1. Add a baseline report manifest file that records:
+   1. Report paths
+   2. Commit SHA
+   3. Policy path/profile
+   4. Dataset list and split settings
+2. Add a small comparison utility script:
+   1. Input: two or more report JSON files
+   2. Output: Markdown diff table for combined + per dataset + per label metrics
+3. Add `make eval-compare` target.
+
+### Code touchpoints
+
+1. `app/tools/` add `compare_eval_reports.py`
+2. `Makefile` add target
+3. `docs/EVALUATION.md` add usage section
+
+### Tests
+
+1. Unit tests for report comparator:
+   1. Missing sections
+   2. Multi-dataset reports
+   3. Per-label diff correctness
+
+### Exit criteria
+
+1. A baseline comparison can be generated with one command.
+2. Diff tool outputs stable, deterministic markdown.
+
+---
+
+## Stage 1: Runtime Readiness and Eval Reliability
+
+### Scope
+
+Remove measurement noise caused by async model loading and ensure eval never silently runs before models are ready.
+
+### Tasks
+
+1. Introduce explicit runtime readiness contract.
+2. Add blocking warm-up with timeout and strict failure options.
+3. Surface readiness in evaluation report metadata.
+
+### Concrete implementation tasks
+
+1. Add runtime interface methods:
+   1. `warm_up(timeout_s: float) -> bool`
+   2. `is_ready() -> bool`
+   3. `load_error() -> str | None`
+2. Implement in:
+   1. `LocalCpuGlinerRuntime`
+   2. `PyTritonGlinerRuntime`
+3. Change evaluation warm-up flow to:
+   1. Warm all recognizers once
+   2. Wait until ready or timeout
+   3. Fail hard in strict mode
+   4. Warn and continue in non-strict mode
+4. Add CLI flags:
+   1. `--warmup-timeout-seconds`
+   2. `--warmup-strict / --no-warmup-strict`
+5. Record per-recognizer warm-up status in report:
+   1. ready/not ready
+   2. init duration
+   3. load error if any
+
+### Code touchpoints
+
+1. `app/runtime/gliner_runtime.py`
+2. `app/core/analysis/recognizers.py`
+3. `app/eval/run.py`
+4. `app/eval/report.py`
+5. `docs/EVALUATION.md`
+
+### Tests
+
+1. Unit:
+   1. Warm-up success path
+   2. Warm-up timeout path
+   3. Strict failure behavior
+2. Integration:
+   1. Eval run with mocked delayed runtime confirms blocking behavior
+
+### Exit criteria
+
+1. No eval sample is processed before heavy recognizers are ready (strict mode).
+2. Report includes warm-up diagnostics.
+
+---
+
+## Stage 2: Language Resolution Upgrade for Mixed Text
+
+### Scope
+
+Replace simplistic single-language heuristic with robust mixed-language handling.
+
+### Tasks
+
+1. Replace Cyrillic-only heuristic with script-ratio resolver.
+2. Support mixed-mode analysis where needed.
+3. Keep config simple and explicit.
+
+### Concrete implementation tasks
+
+1. Add language detection utility:
+   1. Script counts (Cyrillic, Latin, digit-heavy)
+   2. Ratio thresholds
+   3. `auto_single` or `auto_union` decision
+2. Extend analysis profile config:
+   1. `language.strategy: single|union`
+   2. `language.union_thresholds` optional
+3. In union mode:
+   1. Run recognizers in both supported languages
+   2. Merge and deduplicate by `(start,end,canonical_label,detector)`
+4. Add report slices by detected script profile:
+   1. `mostly_cyrillic`
+   2. `mostly_latin`
+   3. `mixed`
+
+### Code touchpoints
+
+1. `app/core/analysis/language.py`
+2. `app/config.py`
+3. `app/core/analysis/service.py`
+4. `app/eval/run.py`
+5. `app/eval/report.py`
+
+### Tests
+
+1. Unit:
+   1. Script classification
+   2. Union merge dedup
+2. Integration:
+   1. Mixed-language sample should run both language recognizer variants
+
+### Exit criteria
+
+1. Mixed-language samples no longer depend on one coarse language guess.
+2. No duplicate span inflation after union merge.
+
+---
+
+## Stage 3: Span Boundary Normalization Layer
+
+### Scope
+
+Improve exact metrics and masking quality by normalizing boundaries after detection and before masking.
+
+### Tasks
+
+1. Introduce a deterministic span normalizer pipeline.
+2. Add label-specific expansion/shrinking rules.
+3. Integrate normalizer in both API runtime and eval runtime.
+
+### Concrete implementation tasks
+
+1. Add module `app/core/analysis/span_normalizer.py`
+2. Implement normalization passes:
+   1. Trim trivial punctuation around all spans
+   2. `location` expansion over comma-separated address chains
+   3. `person` expansion/trim rules around initials and honorific artifacts
+   4. `identifier` canonical token cleanup
+3. Add maximum expansion guards:
+   1. Max char expansion per label
+   2. Stop tokens and sentence boundary guards
+4. Add dedup and conflict resolution post-normalization:
+   1. Prevent overlapping same-label fragments when a merged span is produced
+5. Add config section:
+   1. `analysis.postprocess.boundary.enabled`
+   2. `analysis.postprocess.boundary.max_expansion_chars`
+   3. Label-specific toggles
+
+### Code touchpoints
+
+1. `app/core/analysis/service.py`
+2. `app/core/analysis/span_normalizer.py` (new)
+3. `app/config.py`
+4. `configs/policy.yaml`
+5. `docs/DETECTORS.md` and `README.md`
+
+### Tests
+
+1. Unit:
+   1. Boundary trim cases
+   2. Address chain merge cases
+   3. Overlap conflict handling
+2. Regression:
+   1. Ensure no shift on clean exact spans
+
+### Exit criteria
+
+1. `location` exact metrics improve on both datasets.
+2. No >5% increase in global false positives.
+
+---
+
+## Stage 4: Identifier Recall Improvement Pack
+
+### Scope
+
+Raise identifier recall with targeted pattern coverage and context-aware boosting.
+
+### Tasks
+
+1. Expand identifier regex coverage for observed formats.
+2. Add context-sensitive confidence adjustments.
+3. Add lightweight validators for noisy generic matches.
+
+### Concrete implementation tasks
+
+1. Extend `identifier_regex` patterns:
+   1. Letter-digit ID variants (e.g. `AA1234567`, `AB9876543`)
+   2. Hyphen/parenthesized formats observed in datasets
+   3. Conservative alnum+digit mixed tokens
+2. Add optional context windows:
+   1. Boost score if nearby trigger words (`passport`, `id`, `document`, RU equivalents)
+   2. Penalize score if token appears in known non-ID patterns
+3. Add validators:
+   1. Length bounds
+   2. Character-class sanity checks
+4. Add score calibration block in policy for identifier entity type.
+
+### Code touchpoints
+
+1. `configs/policy.yaml`
+2. `app/core/analysis/recognizers.py`
+3. `app/core/analysis/service.py`
+4. `docs/DETECTORS.md`
+
+### Tests
+
+1. Unit corpus tests for representative identifier samples.
+2. False-positive guard tests with confusing numeric tokens.
+
+### Exit criteria
+
+1. `identifier` exact recall +0.15 absolute on Rubai test split.
+2. `identifier` precision does not drop by more than 0.08.
+
+---
+
+## Stage 5: Phone and High-FP Regex Calibration
+
+### Scope
+
+Reduce avoidable regex-driven false positives without harming true leak coverage.
+
+### Tasks
+
+1. Rework phone regex thresholds and context requirements.
+2. Introduce detector-level score gates.
+3. Add regex gating by language/script profile.
+
+### Concrete implementation tasks
+
+1. Add detector-specific threshold support in config:
+   1. `analysis.detector_thresholds` map
+2. In service filtering:
+   1. Apply `max(policy_min_score, entity_threshold, detector_threshold)`
+3. For `en_pii_regex:PHONE_NUMBER`:
+   1. Raise default score
+   2. Require separators/length patterns less likely to collide with random numbers
+4. Add script-aware gating option:
+   1. Skip certain EN regex patterns on mostly Cyrillic text unless explicit context hit
+
+### Code touchpoints
+
+1. `app/config.py`
+2. `app/core/analysis/service.py`
+3. `configs/policy.yaml`
+4. `app/core/analysis/language.py`
+5. `docs/DETECTORS.md`
+
+### Tests
+
+1. Unit tests for detector threshold precedence.
+2. Unit tests for script-aware gating decisions.
+3. Eval ablation run comparing before/after per-detector FP.
+
+### Exit criteria
+
+1. Lower FP contribution from `en_pii_regex:PHONE_NUMBER` by at least 30%.
+2. Global exact F1 does not regress.
+
+---
+
+## Stage 6: Leakage-Centric Evaluation Metrics
+
+### Scope
+
+Add metrics that better represent leakage prevention quality than strict exact span matching alone.
+
+### Tasks
+
+1. Add character-level and token-level coverage metrics.
+2. Add residual-risk metrics.
+3. Include per-entity leakage miss rates.
+
+### Concrete implementation tasks
+
+1. Add new metrics module functions:
+   1. Character overlap precision/recall/F1
+   2. Token overlap precision/recall/F1
+   3. Residual sensitive chars ratio
+2. Add per-label leakage metrics.
+3. Extend report JSON and markdown sections:
+   1. Combined
+   2. Per dataset
+   3. Per slice (source, noisy, script profile)
+4. Add compatibility in comparator tool from Stage 0.
+
+### Code touchpoints
+
+1. `app/eval/metrics.py`
+2. `app/eval/report.py`
+3. `app/eval/run.py`
+4. `docs/EVALUATION.md`
+
+### Tests
+
+1. Unit tests with synthetic span pairs validating char/token math.
+2. Regression tests ensuring old metrics remain unchanged.
+
+### Exit criteria
+
+1. Reports include both strict NER metrics and leakage-centric metrics.
+2. Evaluation decisions can be based on residual-risk, not just exact F1.
+
+---
+
+## Stage 7: Multi-Profile Eval Runner and Ablation Automation
+
+### Scope
+
+Make iterative quality tuning fast and reproducible.
+
+### Tasks
+
+1. Add one-command multi-profile eval matrix.
+2. Add automatic ablation report generation.
+3. Cache and reuse split/materialization metadata.
+
+### Concrete implementation tasks
+
+1. Add CLI options:
+   1. `--policy-name` repeatable or profile matrix file
+   2. `--detector-ablation` repeatable
+2. Add output folder structure:
+   1. baseline report
+   2. ablation reports
+   3. merged comparison markdown
+3. Add dataset-level progress checkpoints and resume support:
+   1. Partial JSON state per dataset
+   2. Resume flag loads completed dataset results
+
+### Code touchpoints
+
+1. `app/eval/run.py`
+2. `app/tools/compare_eval_reports.py`
+3. `Makefile`
+4. `docs/EVALUATION.md`
+
+### Tests
+
+1. Unit tests for matrix argument parsing.
+2. Integration test with mocked dataset adapters for resume flow.
+
+### Exit criteria
+
+1. Large tuning rounds can be run and resumed reliably.
+2. One command produces a ranked improvement report.
+
+---
+
+## Stage 8: Optional Major Model Additions (Pluggable)
+
+### Scope
+
+Add one or more complementary model detectors while preserving current architecture.
+
+### Candidate additions
+
+1. Hugging Face token classification detector (`transformers` pipeline based)
+2. Optional multilingual NER model specialized for addresses/IDs
+3. Future company fine-tuned GLiNER as drop-in model reference
+
+### Concrete implementation tasks
+
+1. Add new recognizer type to config:
+   1. `hf_token_classifier`
+2. Implement recognizer class with:
+   1. local/offline model path support
+   2. CPU/cuda runtime compatibility
+   3. label-to-canonical mapping
+3. Integrate into Presidio registry builder.
+4. Add detector-level timeout and graceful degradation.
+
+### Code touchpoints
+
+1. `app/config.py`
+2. `app/core/analysis/recognizers.py`
+3. `app/model_assets.py`
+4. `app/tools/download_models.py`
+5. `docs/DETECTORS.md`
+
+### Tests
+
+1. Unit tests for label mapping and conversion.
+2. Offline model load test with local model directory fixture.
+
+### Exit criteria
+
+1. New model can be enabled by policy only.
+2. Air-gapped mode fully supported.
+
+---
+
+## Stage 9: Production Hardening and Observability
+
+### Scope
+
+Prepare the improved stack for stable platform integration.
+
+### Tasks
+
+1. Add internal diagnostics API payload fields:
+   1. per-detector timing
+   2. per-detector span counts
+   3. post-processor mutation counts
+2. Add safety limits:
+   1. max spans per sample
+   2. max processing time per sample
+3. Add offline asset manifest with checksums.
+
+### Code touchpoints
+
+1. `app/api/*`
+2. `app/core/*`
+3. `app/tools/download_models.py`
+4. `README.md`
+
+### Tests
+
+1. Integration tests for timeout and max-span guards.
+2. Manifest validation tests.
+
+### Exit criteria
+
+1. System degrades gracefully under pathological input.
+2. Debug payloads are sufficient for triage without code instrumentation.
+
+---
+
+## 5. Cross-stage testing protocol
+
+Run after every stage:
+
+1. `uv run --extra dev pytest -q`
+2. `uv run --extra eval python -m app.eval.run --split test --policy-path configs/policy.yaml --policy-name external_default --env-file .env.eval --output-dir reports/evaluations`
+3. `uv run --extra eval python -m app.tools.compare_eval_reports --base <baseline.json> --candidate <new.json>`
+
+Stage-gate policy:
+
+1. Do not advance if exact F1 regresses by more than 0.02 unless leakage-centric metrics improve significantly and rationale is documented.
+2. Any detector-specific change must include per-detector FP/TP delta evidence.
+
+## 6. Risk register and mitigations
+
+1. Risk: Overfitting to Rubai annotation quirks.
+   1. Mitigation: track leakage-centric metrics and Scanpatch deltas together.
+2. Risk: Increased latency from union-language and post-processing.
+   1. Mitigation: add timing metrics and configurable toggles.
+3. Risk: Regex expansion creates FP spikes.
+   1. Mitigation: detector-level thresholds and mandatory ablations.
+4. Risk: Warm-up strict mode hurts developer loop.
+   1. Mitigation: keep non-strict mode default for local experiments.
+
+## 7. Delivery order recommendation
+
+Recommended implementation sequence for highest ROI:
+
+1. Stage 1
+2. Stage 3
+3. Stage 4
+4. Stage 5
+5. Stage 6
+6. Stage 2
+7. Stage 7
+8. Stage 8
+9. Stage 9
+
+Rationale:
+
+1. Stage 1 removes measurement noise.
+2. Stage 3 and Stage 4 directly attack biggest observed weaknesses.
+3. Stage 5 controls FP side effects from recall-focused changes.
+4. Stage 6 ensures decisions are aligned with leakage prevention.
+
+## 8. Definition of done for the full refactor
+
+1. All stages completed or explicitly skipped with documented reason.
+2. Final comparison report shows metric deltas for every stage.
+3. Updated docs:
+   1. `docs/EVALUATION.md`
+   2. `docs/DETECTORS.md`
+   3. `README.md`
+4. Air-gapped workflow still validated:
+   1. model download
+   2. offline load
+   3. offline eval run
+5. Clear handoff artifact:
+   1. final metrics summary
+   2. policy diff
+   3. detector behavior changes
+   4. known limitations
+
