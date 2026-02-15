@@ -13,6 +13,9 @@ This project provides detection, reversible masking, and unmasking APIs. It does
 - Project-level runtime switch:
   - `cpu`: local inference (auto-uses MPS on Apple Silicon when available)
   - `cuda`: all supported ML detectors run via PyTriton
+- Single Nemotron knob:
+  - `GR_ENABLE_NEMOTRON=false` by default
+  - set `GR_ENABLE_NEMOTRON=true` to enable Nemotron detector path
 - Air-gapped model workflow:
   - pre-download models with one command
   - run service with offline flags and local model directory
@@ -51,6 +54,7 @@ CPU mode:
 CUDA mode:
 - Guardrails uses PyTriton client.
 - Run PyTriton server separately (`python -m app.pytriton_server.main`).
+- If using Nemotron, set `GR_ENABLE_NEMOTRON=true` in both guardrails and PyTriton environments.
 
 ## Air-Gapped Models
 

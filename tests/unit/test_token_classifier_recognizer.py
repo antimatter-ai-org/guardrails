@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from app.config import RecognizerDefinition
 from app.core.analysis import recognizers
 
 
@@ -58,3 +59,13 @@ def test_token_classifier_recognizer_applies_raw_label_threshold(monkeypatch):
     assert len(out) == 1
     assert out[0].start == 5
     assert out[0].end == 13
+
+
+def test_token_classifier_builder_respects_global_enable_knob(monkeypatch):
+    definition = RecognizerDefinition(
+        type="token_classifier",
+        enabled=True,
+        params={"model_name": "scanpatch/pii-ner-nemotron", "labels": ["email"]},
+    )
+    monkeypatch.setattr(recognizers.settings, "enable_nemotron", False)
+    assert recognizers._build_token_classifier_recognizers("nemotron", definition, ["en"]) == []  # noqa: SLF001

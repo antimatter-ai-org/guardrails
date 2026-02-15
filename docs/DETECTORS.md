@@ -216,6 +216,7 @@ Configured mapping to normalized entities:
 - `TIN`
 
 Policy notes:
+- Recognizer is loaded only when `GR_ENABLE_NEMOTRON=true` (default is disabled).
 - Nemotron is configured with a structured-label allowlist (name/org labels are intentionally excluded).
 - Per-entity minimum confidence thresholds are applied in recognizer postprocessing (`entity_thresholds` / `raw_label_thresholds`).
 

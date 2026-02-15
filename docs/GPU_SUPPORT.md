@@ -4,6 +4,10 @@ This project has one project-level runtime switch:
 - `cpu`: all detectors run in-process via torch (Apple Silicon supported with MPS fallback).
 - `cuda`: all supported CUDA-capable models run through PyTriton.
 
+Nemotron is controlled by one global flag:
+- `GR_ENABLE_NEMOTRON=false` (default)
+- set `GR_ENABLE_NEMOTRON=true` to enable Nemotron recognizer and PyTriton model binding.
+
 ## Runtime switch
 
 Use environment variable:
@@ -21,7 +25,7 @@ Both guardrails and PyTriton can load models from a local directory:
 
 ## Model behavior
 
-GLiNER and Nemotron token-classifier recognizers are enabled in `configs/policy.yaml`.
+GLiNER recognizer is always enabled by policy. Nemotron recognizer exists in policy but is runtime-gated by `GR_ENABLE_NEMOTRON`.
 
 - In `cpu` mode:
   - Guardrails process loads model runtimes locally with torch/transformers.
@@ -30,7 +34,8 @@ GLiNER and Nemotron token-classifier recognizers are enabled in `configs/policy.
 
 - In `cuda` mode:
   - Guardrails process uses PyTriton client.
-  - PyTriton server hosts all supported ML models on CUDA GPU (`gliner`, `nemotron`).
+  - PyTriton server always hosts `gliner`.
+  - PyTriton hosts `nemotron` only when `GR_ENABLE_NEMOTRON=true`.
 
 ## PyTriton services
 
@@ -76,6 +81,7 @@ Guardrails CPU:
 
 Guardrails CUDA:
 - `GR_RUNTIME_MODE=cuda`
+- `GR_ENABLE_NEMOTRON=false` (set true to use Nemotron path)
 - `GR_PYTRITON_URL=localhost:8000`
 - `GR_PYTRITON_INIT_TIMEOUT_S=30`
 - `GR_PYTRITON_INFER_TIMEOUT_S=60`
@@ -83,6 +89,7 @@ Guardrails CUDA:
 - `GR_OFFLINE_MODE=true`
 
 PyTriton server:
+- `GR_ENABLE_NEMOTRON=false` (set true to bind Nemotron model)
 - `GR_PYTRITON_GLINER_MODEL_REF=urchade/gliner_multi-v2.1`
 - `GR_PYTRITON_TOKEN_MODEL_REF=scanpatch/pii-ner-nemotron`
 - `GR_PYTRITON_DEVICE=cuda`

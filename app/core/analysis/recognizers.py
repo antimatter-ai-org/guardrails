@@ -558,6 +558,9 @@ def _build_token_classifier_recognizers(
     definition: RecognizerDefinition,
     supported_languages: list[str],
 ) -> list[EntityRecognizer]:
+    if not settings.enable_nemotron:
+        return []
+
     params = definition.params
     model_name = str(params.get("model_name", "scanpatch/pii-ner-nemotron"))
     threshold = float(params.get("threshold", 0.56))

@@ -17,6 +17,7 @@ class Settings(BaseSettings):
     redis_url: str = "redis://redis:6379/0"
 
     runtime_mode: Literal["cpu", "cuda"] = "cpu"
+    enable_nemotron: bool = False
     model_dir: str | None = None
     offline_mode: bool = False
 

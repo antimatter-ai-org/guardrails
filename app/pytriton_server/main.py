@@ -18,6 +18,7 @@ def run() -> None:
 
     gliner_model_ref = _env("GR_PYTRITON_GLINER_MODEL_REF", "urchade/gliner_multi-v2.1")
     token_model_ref = _env("GR_PYTRITON_TOKEN_MODEL_REF", "scanpatch/pii-ner-nemotron")
+    enable_nemotron = _env("GR_ENABLE_NEMOTRON", "false").strip().lower() in {"1", "true", "yes", "on"}
     model_dir = os.getenv("GR_MODEL_DIR")
     offline_mode = _env("GR_OFFLINE_MODE", "false").strip().lower() in {"1", "true", "yes", "on"}
     device = _env("GR_PYTRITON_DEVICE", "cuda")
@@ -28,17 +29,20 @@ def run() -> None:
         model_dir=model_dir,
         strict=offline_mode,
     )
-    token_source = resolve_token_classifier_model_source(
-        model_name=token_model_ref,
-        model_dir=model_dir,
-        strict=offline_mode,
-    )
+    token_source = ""
+    if enable_nemotron:
+        token_source = resolve_token_classifier_model_source(
+            model_name=token_model_ref,
+            model_dir=model_dir,
+            strict=offline_mode,
+        )
 
     bindings = build_bindings(
         gliner_model_ref=gliner_source,
         token_classifier_model_ref=token_source,
         device=device,
         max_batch_size=max_batch_size,
+        enable_nemotron=enable_nemotron,
     )
 
     with Triton() as triton:
