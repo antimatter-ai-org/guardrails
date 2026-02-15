@@ -9,10 +9,10 @@ This project provides detection, reversible masking, and unmasking APIs. It does
 - Reversible masking for request payloads.
 - Response unmasking for full and streaming outputs.
 - Redis-backed request/stream state.
-- RU/EN recognizer stack with GLiNER + deterministic recognizers.
+- RU/EN recognizer stack with GLiNER + Nemotron token-classifier + deterministic recognizers.
 - Project-level runtime switch:
   - `cpu`: local inference (auto-uses MPS on Apple Silicon when available)
-  - `cuda`: GLiNER inference via PyTriton
+  - `cuda`: all supported ML detectors run via PyTriton
 - Air-gapped model workflow:
   - pre-download models with one command
   - run service with offline flags and local model directory
@@ -45,7 +45,7 @@ Global runtime mode:
 - `GR_RUNTIME_MODE=cuda`
 
 CPU mode:
-- GLiNER runs in-process.
+- GLiNER and token-classifier detectors run in-process.
 - `GR_CPU_DEVICE=auto` selects `mps` on Apple Silicon when available, otherwise `cpu`.
 
 CUDA mode:

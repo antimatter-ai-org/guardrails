@@ -19,18 +19,18 @@ Both guardrails and PyTriton can load models from a local directory:
 - set `GR_MODEL_DIR=/path/to/models`
 - set `GR_OFFLINE_MODE=true`
 
-## GLiNER behavior
+## Model behavior
 
-GLiNER is enabled by default in `configs/policy.yaml`.
+GLiNER and Nemotron token-classifier recognizers are enabled in `configs/policy.yaml`.
 
 - In `cpu` mode:
-  - Guardrails process loads GLiNER locally with torch.
+  - Guardrails process loads model runtimes locally with torch/transformers.
   - Device selection uses `GR_CPU_DEVICE` (`auto` by default; prefers `mps` on Apple Silicon, then `cpu`).
   - Model loading is lazy/background on first use to keep API startup fast.
 
 - In `cuda` mode:
   - Guardrails process uses PyTriton client.
-  - PyTriton server hosts GLiNER model on CUDA GPU.
+  - PyTriton server hosts all supported ML models on CUDA GPU (`gliner`, `nemotron`).
 
 ## PyTriton services
 
@@ -38,7 +38,8 @@ PyTriton server entrypoint:
 - `python -m app.pytriton_server.main`
 
 Model pipeline today:
-- `gliner` (first model)
+- `gliner`
+- `nemotron` (scanpatch/pii-ner-nemotron token-classifier)
 
 Pluggability path:
 - Add new model class under `app/pytriton_server/models/`.
@@ -76,15 +77,14 @@ Guardrails CPU:
 Guardrails CUDA:
 - `GR_RUNTIME_MODE=cuda`
 - `GR_PYTRITON_URL=localhost:8000`
-- `GR_PYTRITON_MODEL_NAME=gliner`
 - `GR_PYTRITON_INIT_TIMEOUT_S=30`
 - `GR_PYTRITON_INFER_TIMEOUT_S=60`
 - `GR_MODEL_DIR=/path/to/models`
 - `GR_OFFLINE_MODE=true`
 
 PyTriton server:
-- `GR_PYTRITON_MODEL_NAME=gliner`
-- `GR_PYTRITON_MODEL_REF=urchade/gliner_multi-v2.1`
+- `GR_PYTRITON_GLINER_MODEL_REF=urchade/gliner_multi-v2.1`
+- `GR_PYTRITON_TOKEN_MODEL_REF=scanpatch/pii-ner-nemotron`
 - `GR_PYTRITON_DEVICE=cuda`
 - `GR_PYTRITON_MAX_BATCH_SIZE=32`
 - `GR_MODEL_DIR=/path/to/models`

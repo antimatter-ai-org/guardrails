@@ -183,3 +183,43 @@ Normalized entity labels produced by recognizer:
 Examples:
 - `Контакт: ivan@example.com` -> `EMAIL_ADDRESS`
 - `Телефон +7 999 123 45 67` -> `PHONE_NUMBER`
+
+## Recognizer: `nemotron_pii_token_classifier`
+
+Type: `token_classifier`
+
+Source:
+- Hugging Face token-classification model `scanpatch/pii-ner-nemotron` (`transformers`, XLM-RoBERTa family).
+- Runtime:
+- `cpu` mode: local transformers inference (CPU/MPS auto-selection).
+- `cuda` mode: PyTriton-hosted model (served as `nemotron`).
+
+Raw model labels (BIO collapsed to entity group):
+- `address`, `address_apartment`, `address_building`, `address_city`, `address_country`, `address_district`, `address_geolocation`, `address_house`, `address_postal_code`, `address_region`, `address_street`
+- `date`
+- `document_number`
+- `email`
+- `first_name`, `last_name`, `middle_name`, `name`, `name_initials`, `nickname`
+- `ip`
+- `military_individual_number`
+- `mobile_phone`
+- `organization`
+- `snils`
+- `tin`
+- `vehicle_number`
+
+Configured mapping to normalized entities:
+- `LOCATION`
+- `DATE_TIME`
+- `DOCUMENT_NUMBER`
+- `EMAIL_ADDRESS`
+- `PERSON`
+- `IP_ADDRESS`
+- `PHONE_NUMBER`
+- `ORGANIZATION`
+- `TIN`
+
+Examples:
+- `Проживает: г. Казань, ул. Пушкина 12` -> `LOCATION`
+- `Почта: ivan.petrov@corp.local` -> `EMAIL_ADDRESS`
+- `ИНН 7707083893` -> `TIN`

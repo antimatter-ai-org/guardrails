@@ -10,6 +10,7 @@ from presidio_analyzer import EntityRecognizer, Pattern, PatternRecognizer, Reco
 
 from app.config import RecognizerDefinition
 from app.runtime.gliner_runtime import build_gliner_runtime
+from app.runtime.token_classifier_runtime import build_token_classifier_runtime
 from app.settings import settings
 
 _FLAG_MAP: dict[str, int] = {
@@ -28,9 +29,11 @@ def _normalize_entity_type(label: str) -> str:
         return "ORGANIZATION"
     if normalized in {"LOCATION", "ADDRESS", "CITY", "DISTRICT", "POSTAL_CODE", "STREET_ADDRESS"}:
         return "LOCATION"
+    if normalized.startswith("ADDRESS_"):
+        return "LOCATION"
     if normalized in {"EMAIL", "EMAIL_ADDRESS"}:
         return "EMAIL_ADDRESS"
-    if normalized in {"PHONE", "PHONE_NUMBER"}:
+    if normalized in {"PHONE", "PHONE_NUMBER", "MOBILE_PHONE"}:
         return "PHONE_NUMBER"
     if normalized in {"IP", "IP_ADDRESS"}:
         return "IP_ADDRESS"
@@ -183,6 +186,7 @@ class GlinerPresidioRecognizer(EntityRecognizer):
         model_name: str,
         labels: list[str],
         threshold: float,
+        triton_model_name: str = "gliner",
         chunking: dict[str, Any] | None = None,
     ) -> None:
         self._labels = [item for item in labels if item]
@@ -192,7 +196,7 @@ class GlinerPresidioRecognizer(EntityRecognizer):
             model_name=model_name,
             cpu_device=settings.cpu_device,
             pytriton_url=settings.pytriton_url,
-            pytriton_model_name=settings.pytriton_model_name,
+            pytriton_model_name=triton_model_name,
             pytriton_init_timeout_s=settings.pytriton_init_timeout_s,
             pytriton_infer_timeout_s=settings.pytriton_infer_timeout_s,
             chunking_enabled=bool((chunking or {}).get("enabled", True)),
@@ -217,6 +221,104 @@ class GlinerPresidioRecognizer(EntityRecognizer):
         for item in raw_predictions:
             label = str(item.get("label", ""))
             entity_type = _normalize_entity_type(label)
+            if entities and entity_type not in entities:
+                continue
+            start = int(item.get("start", -1))
+            end = int(item.get("end", -1))
+            if end <= start:
+                continue
+            score = float(item.get("score", self._threshold))
+            results.append(
+                RecognizerResult(
+                    entity_type=entity_type,
+                    start=start,
+                    end=end,
+                    score=score,
+                    recognition_metadata={
+                        RecognizerResult.RECOGNIZER_NAME_KEY: self.name,
+                        RecognizerResult.RECOGNIZER_IDENTIFIER_KEY: self.id,
+                    },
+                )
+            )
+        return results
+
+
+class TokenClassifierPresidioRecognizer(EntityRecognizer):
+    def __init__(
+        self,
+        *,
+        name: str,
+        supported_language: str,
+        model_name: str,
+        threshold: float,
+        labels: list[str],
+        label_mapping: dict[str, str] | None = None,
+        aggregation_strategy: str = "simple",
+        triton_model_name: str = "nemotron",
+        chunking: dict[str, Any] | None = None,
+    ) -> None:
+        self._threshold = float(threshold)
+        self._labels = [str(item).strip() for item in labels if str(item).strip()]
+        self._label_mapping = {
+            str(key).strip().lower(): _normalize_entity_type(str(value))
+            for key, value in (label_mapping or {}).items()
+            if str(key).strip() and str(value).strip()
+        }
+        self._runtime = build_token_classifier_runtime(
+            runtime_mode=settings.runtime_mode,
+            model_name=model_name,
+            cpu_device=settings.cpu_device,
+            pytriton_url=settings.pytriton_url,
+            pytriton_model_name=triton_model_name,
+            pytriton_init_timeout_s=settings.pytriton_init_timeout_s,
+            pytriton_infer_timeout_s=settings.pytriton_infer_timeout_s,
+            aggregation_strategy=aggregation_strategy,
+            chunking_enabled=bool((chunking or {}).get("enabled", True)),
+            chunking_max_tokens=int((chunking or {}).get("max_tokens", 320)),
+            chunking_overlap_tokens=int((chunking or {}).get("overlap_tokens", 64)),
+            chunking_max_chunks=int((chunking or {}).get("max_chunks", 64)),
+            chunking_boundary_lookback_tokens=int((chunking or {}).get("boundary_lookback_tokens", 24)),
+        )
+        # Keep entities broad; exact labels are normalized per model output.
+        entities = [
+            "PERSON",
+            "ORGANIZATION",
+            "LOCATION",
+            "EMAIL_ADDRESS",
+            "PHONE_NUMBER",
+            "IP_ADDRESS",
+            "DATE_TIME",
+            "DOCUMENT_NUMBER",
+            "TIN",
+            "CREDIT_CARD",
+            "API_KEY",
+        ]
+        super().__init__(
+            supported_entities=entities,
+            name=name,
+            supported_language=supported_language,
+        )
+
+    def load(self) -> None:
+        return None
+
+    def _map_label(self, label: str) -> str:
+        normalized = label.strip().lower()
+        if normalized.startswith("b-") or normalized.startswith("i-"):
+            normalized = normalized[2:]
+        mapped = self._label_mapping.get(normalized)
+        if mapped:
+            return mapped
+        return _normalize_entity_type(label)
+
+    def analyze(self, text: str, entities: list[str], nlp_artifacts: Any = None) -> list[RecognizerResult]:
+        raw_predictions = self._runtime.predict_entities(text, self._labels, threshold=self._threshold)
+        results: list[RecognizerResult] = []
+        for item in raw_predictions:
+            label = str(item.get("label", ""))
+            if not label:
+                continue
+            entity_type = self._map_label(label)
             if entities and entity_type not in entities:
                 continue
             start = int(item.get("start", -1))
@@ -414,6 +516,7 @@ def _build_gliner_recognizers(
         return []
     model_name = str(params.get("model_name", "urchade/gliner_multi-v2.1"))
     threshold = float(params.get("threshold", 0.62))
+    triton_model_name = str(params.get("triton_model_name", "gliner"))
     chunking = params.get("chunking", {})
     return [
         GlinerPresidioRecognizer(
@@ -422,6 +525,37 @@ def _build_gliner_recognizers(
             model_name=model_name,
             labels=labels,
             threshold=threshold,
+            triton_model_name=triton_model_name,
+            chunking=chunking if isinstance(chunking, dict) else {},
+        )
+        for lang in _iter_languages(params, supported_languages)
+    ]
+
+
+def _build_token_classifier_recognizers(
+    recognizer_id: str,
+    definition: RecognizerDefinition,
+    supported_languages: list[str],
+) -> list[EntityRecognizer]:
+    params = definition.params
+    model_name = str(params.get("model_name", "scanpatch/pii-ner-nemotron"))
+    threshold = float(params.get("threshold", 0.56))
+    aggregation_strategy = str(params.get("aggregation_strategy", "simple"))
+    triton_model_name = str(params.get("triton_model_name", "nemotron"))
+    labels = [str(item) for item in params.get("labels", [])]
+    raw_mapping = params.get("label_mapping", {})
+    label_mapping = raw_mapping if isinstance(raw_mapping, dict) else {}
+    chunking = params.get("chunking", {})
+    return [
+        TokenClassifierPresidioRecognizer(
+            name=f"{recognizer_id}:{lang}",
+            supported_language=lang,
+            model_name=model_name,
+            threshold=threshold,
+            labels=labels,
+            label_mapping=label_mapping,
+            aggregation_strategy=aggregation_strategy,
+            triton_model_name=triton_model_name,
             chunking=chunking if isinstance(chunking, dict) else {},
         )
         for lang in _iter_languages(params, supported_languages)
@@ -442,6 +576,8 @@ def _build_recognizers_for_definition(
         return _build_ip_recognizers(recognizer_id, definition, supported_languages)
     if rec_type == "gliner":
         return _build_gliner_recognizers(recognizer_id, definition, supported_languages)
+    if rec_type == "token_classifier":
+        return _build_token_classifier_recognizers(recognizer_id, definition, supported_languages)
     if rec_type == "entropy":
         params = definition.params
         return [
