@@ -47,6 +47,9 @@ logging.basicConfig(
     format="%(asctime)s %(levelname)s %(name)s %(message)s",
 )
 logger = logging.getLogger(__name__)
+if logger.isEnabledFor(logging.DEBUG):
+    for noisy_logger in ("httpcore", "httpx", "filelock", "huggingface_hub", "urllib3"):
+        logging.getLogger(noisy_logger).setLevel(logging.INFO)
 
 app = FastAPI(title="Guardrails Service", version="0.4.0")
 
@@ -60,6 +63,67 @@ _SUPPORTED_TRACE_LEVELS = ["NONE", "BASIC", "FULL"]
 
 def _to_inputs(items: list[ContentItem]) -> list[TextInput]:
     return [TextInput(id=item.id, text=item.text) for item in items]
+
+
+def _items_payload(items: list[Any]) -> list[dict[str, str]]:
+    payload: list[dict[str, str]] = []
+    for item in items:
+        if isinstance(item, dict):
+            item_id = str(item.get("id", ""))
+            text = str(item.get("text", ""))
+        else:
+            item_id = str(getattr(item, "id", ""))
+            text = str(getattr(item, "text", ""))
+        payload.append({"id": item_id, "text": text})
+    return payload
+
+
+def _debug_apply_log(
+    *,
+    stage: str,
+    request_id: str | None,
+    policy_id: str | None,
+    source: str,
+    input_items: list[Any],
+    output_items: list[Any] | None = None,
+) -> None:
+    if not logger.isEnabledFor(logging.DEBUG):
+        return
+    logger.debug(
+        "guardrails.apply stage=%s request_id=%s policy_id=%s source=%s input=%s output=%s",
+        stage,
+        request_id,
+        policy_id,
+        source,
+        _items_payload(input_items),
+        _items_payload(output_items or []),
+    )
+
+
+def _debug_stream_log(
+    *,
+    stage: str,
+    request_id: str | None,
+    policy_id: str | None,
+    source: str,
+    stream_id: str,
+    final: bool,
+    input_chunk: str,
+    output_chunk: str,
+) -> None:
+    if not logger.isEnabledFor(logging.DEBUG):
+        return
+    logger.debug(
+        "guardrails.apply-stream stage=%s request_id=%s policy_id=%s source=%s stream_id=%s final=%s input_chunk=%r output_chunk=%r",
+        stage,
+        request_id,
+        policy_id,
+        source,
+        stream_id,
+        final,
+        input_chunk,
+        output_chunk,
+    )
 
 
 def _score_to_severity(score: float) -> str:
@@ -311,6 +375,14 @@ async def apply_endpoint(request: ApplyRequest) -> ApplyResponse:
         result = await app.state.guardrails.detect_items(items=content_inputs, policy_name=policy_name)
         findings = _findings_from_result_items(items=result.items, output_scope=request.output_scope)
         action: ActionType = "FLAGGED" if findings else "NONE"
+        _debug_apply_log(
+            stage="detect",
+            request_id=request.request_id,
+            policy_id=policy_name,
+            source=request.source,
+            input_items=request.content,
+            output_items=output_items,
+        )
         return ApplyResponse(
             action=action,
             source=request.source,
@@ -339,6 +411,14 @@ async def apply_endpoint(request: ApplyRequest) -> ApplyResponse:
         except GuardrailsBlockedError:
             detected = await app.state.guardrails.detect_items(items=content_inputs, policy_name=policy_name)
             findings = _findings_from_result_items(items=detected.items, output_scope=request.output_scope)
+            _debug_apply_log(
+                stage="deidentify_blocked",
+                request_id=request.request_id or session_id,
+                policy_id=policy_name,
+                source=request.source,
+                input_items=request.content,
+                output_items=[],
+            )
             return ApplyResponse(
                 action="BLOCKED",
                 source=request.source,
@@ -360,6 +440,14 @@ async def apply_endpoint(request: ApplyRequest) -> ApplyResponse:
 
         findings = _findings_from_result_items(items=masked.items, output_scope=request.output_scope)
         output_items = [OutputItem(id=item.id, text=item.text) for item in masked.items]
+        _debug_apply_log(
+            stage="deidentify",
+            request_id=request.request_id or session_id,
+            policy_id=masked.policy_name,
+            source=request.source,
+            input_items=request.content,
+            output_items=output_items,
+        )
         action = "MASKED" if masked.placeholders_count > 0 else "NONE"
         return ApplyResponse(
             action=action,
@@ -391,6 +479,14 @@ async def apply_endpoint(request: ApplyRequest) -> ApplyResponse:
             )
         except GuardrailsNotFoundError:
             findings = [_missing_session_finding(session_id)]
+            _debug_apply_log(
+                stage="reidentify_missing_session_blocked",
+                request_id=request.request_id or session_id,
+                policy_id=policy_name,
+                source=request.source,
+                input_items=request.content,
+                output_items=[],
+            )
             return ApplyResponse(
                 action="BLOCKED",
                 source=request.source,
@@ -410,6 +506,14 @@ async def apply_endpoint(request: ApplyRequest) -> ApplyResponse:
 
         if not unmasked.context_found:
             findings = [_missing_session_finding(session_id)]
+            _debug_apply_log(
+                stage="reidentify_missing_session_flagged",
+                request_id=request.request_id or session_id,
+                policy_id=policy_name,
+                source=request.source,
+                input_items=request.content,
+                output_items=output_items,
+            )
             return ApplyResponse(
                 action="FLAGGED",
                 source=request.source,
@@ -423,6 +527,14 @@ async def apply_endpoint(request: ApplyRequest) -> ApplyResponse:
             )
 
         output_items = [OutputItem(id=item.id, text=item.text) for item in unmasked.items]
+        _debug_apply_log(
+            stage="reidentify",
+            request_id=request.request_id or session_id,
+            policy_id=policy_name,
+            source=request.source,
+            input_items=request.content,
+            output_items=output_items,
+        )
         return ApplyResponse(
             action="MASKED" if unmasked.replacements > 0 else "NONE",
             source=request.source,
@@ -474,6 +586,16 @@ async def apply_stream_endpoint(request: ApplyStreamRequest) -> ApplyStreamRespo
         )
     except GuardrailsNotFoundError:
         findings = [_missing_session_finding(session_id)]
+        _debug_stream_log(
+            stage="reidentify_stream_missing_session_blocked",
+            request_id=request.request_id or session_id,
+            policy_id=policy_name,
+            source=request.source,
+            stream_id=request.stream.id,
+            final=request.stream.final,
+            input_chunk=request.stream.chunk,
+            output_chunk="",
+        )
         return ApplyStreamResponse(
             action="BLOCKED",
             source=request.source,
@@ -500,6 +622,16 @@ async def apply_stream_endpoint(request: ApplyStreamRequest) -> ApplyStreamRespo
         action = "MASKED"
 
     output_chunk = result.output
+    _debug_stream_log(
+        stage="reidentify_stream",
+        request_id=request.request_id or session_id,
+        policy_id=policy_name,
+        source=request.source,
+        stream_id=request.stream.id,
+        final=request.stream.final,
+        input_chunk=request.stream.chunk,
+        output_chunk=output_chunk,
+    )
     output_chars = len(output_chunk)
     output_items = 1 if output_chunk else 0
     return ApplyStreamResponse(
