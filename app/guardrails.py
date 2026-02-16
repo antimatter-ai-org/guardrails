@@ -115,6 +115,18 @@ class GuardrailsService:
         return max((len(key) for key in placeholders), default=1)
 
     @staticmethod
+    def _pending_placeholder_prefix_len(text: str, placeholders: dict[str, str]) -> int:
+        if not text or not placeholders:
+            return 0
+        max_placeholder_len = max((len(placeholder) for placeholder in placeholders), default=0)
+        max_suffix = min(max(0, max_placeholder_len - 1), len(text))
+        for suffix_len in range(max_suffix, 0, -1):
+            suffix = text[-suffix_len:]
+            if any(placeholder.startswith(suffix) for placeholder in placeholders):
+                return suffix_len
+        return 0
+
+    @staticmethod
     def _serialize_diagnostics(diagnostics: AnalysisDiagnostics | None) -> dict[str, Any]:
         if diagnostics is None:
             return {
@@ -387,26 +399,7 @@ class GuardrailsService:
                 context_deleted=delete_context,
             )
 
-        max_placeholder_len = int(context.get("max_placeholder_len") or self._max_placeholder_len(placeholders))
-        holdback = max(0, max_placeholder_len - 1)
-        if holdback and len(combined) <= holdback:
-            await self._mapping_store.save_stream_state(
-                request_id=request_id,
-                stream_id=stream_id,
-                payload={"buffer": combined},
-                ttl_seconds=ttl_seconds,
-            )
-            return StreamUnmaskOperationResult(
-                request_id=request_id,
-                stream_id=stream_id,
-                context_found=True,
-                output="",
-                replacements=0,
-                buffered_chars=len(combined),
-                final=False,
-                context_deleted=False,
-            )
-
+        holdback = self._pending_placeholder_prefix_len(combined, placeholders)
         safe_text = combined[:-holdback] if holdback else combined
         pending_buffer = combined[-holdback:] if holdback else ""
         unmasked = ReversibleMaskingEngine.unmask(safe_text, placeholders)

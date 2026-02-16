@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 import copy
 import logging
 import os
@@ -475,7 +473,16 @@ class GuardrailsCallback(CustomLogger):
 
         try:
             async for chunk in response:
-                refs, completed_choice_indexes = self._collect_stream_delta_refs(chunk)
+                working_chunk = chunk
+                if hasattr(chunk, "model_dump"):
+                    try:
+                        working_chunk = chunk.model_dump()  # type: ignore[assignment]
+                    except Exception:
+                        working_chunk = chunk
+                elif isinstance(chunk, dict):
+                    working_chunk = copy.deepcopy(chunk)
+
+                refs, completed_choice_indexes = self._collect_stream_delta_refs(working_chunk)
                 for ref in refs:
                     stream_id = self._choice_stream_id(ref.choice_index)
                     active_stream_ids.add(stream_id)
@@ -490,12 +497,18 @@ class GuardrailsCallback(CustomLogger):
                     if not isinstance(output_chunk, str):
                         raise HTTPException(status_code=503, detail="guardrails invalid stream response: output_chunk must be string")
                     ref.setter(output_chunk)
-                    last_chunk_per_choice[ref.choice_index] = chunk
+                    last_chunk_per_choice[ref.choice_index] = working_chunk
 
                 for choice_index in completed_choice_indexes:
-                    last_chunk_per_choice.setdefault(choice_index, chunk)
+                    last_chunk_per_choice.setdefault(choice_index, working_chunk)
 
-                yield chunk
+                emit_chunk = working_chunk
+                if _ModelResponseStream is not None and isinstance(working_chunk, dict):
+                    try:
+                        emit_chunk = _ModelResponseStream(**working_chunk)
+                    except Exception:
+                        emit_chunk = working_chunk
+                yield emit_chunk
         except Exception:
             await self._finalize_best_effort(session_id)
             self._clear_ctx(request_data)

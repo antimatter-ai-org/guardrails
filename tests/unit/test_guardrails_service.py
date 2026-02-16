@@ -158,7 +158,7 @@ async def test_stream_unmask_handles_split_placeholder() -> None:
         delete_context=True,
     )
 
-    assert out1.output == ""
+    assert out1.output == "Hello "
     assert "ivan@example.com" in (out1.output + out2.output)
 
 
