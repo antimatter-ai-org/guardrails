@@ -65,3 +65,28 @@ def test_normalize_token_classifier_label() -> None:
     assert token_classifier_runtime._normalize_token_classifier_label("B-email") == "email"  # noqa: SLF001
     assert token_classifier_runtime._normalize_token_classifier_label("I-address_city") == "address_city"  # noqa: SLF001
     assert token_classifier_runtime._normalize_token_classifier_label("organization") == "organization"  # noqa: SLF001
+
+
+def test_local_runtime_warm_up_reflects_constructor_load_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    def failed_load(self) -> None:  # noqa: ANN001
+        self._pipeline = None  # noqa: SLF001
+        self._load_error = "load failed"  # noqa: SLF001
+
+    monkeypatch.setattr(token_classifier_runtime.LocalCpuTokenClassifierRuntime, "_load_model", failed_load)
+    runtime = token_classifier_runtime.LocalCpuTokenClassifierRuntime(model_name="dummy")
+
+    assert runtime.warm_up(timeout_s=0.5) is False
+    assert runtime.is_ready() is False
+    assert runtime.load_error() == "load failed"
+
+
+def test_pytriton_runtime_predict_requires_warm_up() -> None:
+    runtime = token_classifier_runtime.PyTritonTokenClassifierRuntime(
+        model_name="nemotron",
+        pytriton_url="localhost:8000",
+        init_timeout_s=10.0,
+        infer_timeout_s=20.0,
+    )
+
+    with pytest.raises(RuntimeError, match="not ready"):
+        runtime.predict_entities("hello", ["email"], threshold=0.5)

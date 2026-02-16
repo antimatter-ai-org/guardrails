@@ -2,8 +2,6 @@ from __future__ import annotations
 
 import json
 import re
-import threading
-import time
 from abc import ABC, abstractmethod
 from typing import Any
 
@@ -53,9 +51,8 @@ class LocalCpuTokenClassifierRuntime(TokenClassifierRuntime):
         self._aggregation_strategy = aggregation_strategy
         self._chunking = (chunking or GlinerChunkingConfig()).normalized()
         self._pipeline: Any | None = None
-        self._loading_started = False
-        self._loading_lock = threading.Lock()
         self._load_error: str | None = None
+        self._load_model()
 
     def _load_model(self) -> None:
         try:
@@ -82,14 +79,6 @@ class LocalCpuTokenClassifierRuntime(TokenClassifierRuntime):
             )
         except Exception as exc:  # pragma: no cover - model availability dependent
             self._load_error = f"token-classifier load error: {exc}"
-
-    def _ensure_loading_started(self) -> None:
-        with self._loading_lock:
-            if self._loading_started:
-                return
-            self._loading_started = True
-            thread = threading.Thread(target=self._load_model, daemon=True)
-            thread.start()
 
     @staticmethod
     def _to_sample_batches(raw_outputs: Any, expected_batch: int) -> list[list[dict[str, Any]]]:
@@ -152,8 +141,7 @@ class LocalCpuTokenClassifierRuntime(TokenClassifierRuntime):
 
     def predict_entities(self, text: str, labels: list[str], threshold: float) -> list[dict[str, Any]]:
         if self._pipeline is None:
-            self._ensure_loading_started()
-            return []
+            raise RuntimeError(self._load_error or "token-classifier runtime is not ready")
         return run_chunked_inference(
             text=text,
             labels=labels,
@@ -163,23 +151,7 @@ class LocalCpuTokenClassifierRuntime(TokenClassifierRuntime):
         )
 
     def warm_up(self, timeout_s: float) -> bool:
-        self._ensure_loading_started()
-        timeout = max(0.0, float(timeout_s))
-        if self._pipeline is not None:
-            return True
-        if self._load_error:
-            return False
-
-        if timeout == 0.0:
-            return self._pipeline is not None
-
-        started = time.monotonic()
-        while (time.monotonic() - started) < timeout:
-            if self._pipeline is not None:
-                return True
-            if self._load_error:
-                return False
-            time.sleep(0.05)
+        _ = timeout_s
         return self._pipeline is not None
 
     def is_ready(self) -> bool:
@@ -295,6 +267,8 @@ class PyTritonTokenClassifierRuntime(TokenClassifierRuntime):
         return outputs
 
     def predict_entities(self, text: str, labels: list[str], threshold: float) -> list[dict[str, Any]]:
+        if not self._ready:
+            raise RuntimeError(self._load_error or "pytriton token-classifier runtime is not ready")
         return run_chunked_inference(
             text=text,
             labels=labels,

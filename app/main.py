@@ -264,6 +264,7 @@ def _load_runtime() -> None:
     )
     if warmup_errors:
         raise RuntimeError(f"model runtime warm-up failed: {warmup_errors}")
+    app.state.models_ready = True
     logger.info(
         "policy loaded from %s, profiles=%s, recognizers=%s",
         settings.policy_path,
@@ -275,6 +276,7 @@ def _load_runtime() -> None:
 @app.on_event("startup")
 async def startup() -> None:
     apply_model_env(model_dir=settings.model_dir, offline_mode=settings.offline_mode)
+    app.state.models_ready = False
     manager: EmbeddedPyTritonManager | None = None
     try:
         if settings.runtime_mode == "cuda":
@@ -310,6 +312,8 @@ async def healthz() -> dict[str, str]:
 @app.get("/readyz")
 async def readyz() -> dict[str, str]:
     try:
+        if not bool(getattr(app.state, "models_ready", False)):
+            raise RuntimeError("model runtimes are still loading")
         pong = await app.state.redis.ping()
         if not pong:
             raise RuntimeError("redis ping returned false")
@@ -326,6 +330,7 @@ async def readyz() -> dict[str, str]:
 
 @app.post("/admin/reload")
 async def reload_policy() -> dict[str, Any]:
+    app.state.models_ready = False
     _load_runtime()
     config = app.state.policy_resolver.config
     return {

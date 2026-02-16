@@ -447,8 +447,6 @@ class NatashaNerRecognizer(EntityRecognizer):
         if entities and not set(entities).intersection({"PERSON", "ORGANIZATION", "LOCATION"}):
             return []
         if self._segmenter is None or self._tagger is None or self._doc_cls is None:
-            self.load()
-        if self._segmenter is None or self._tagger is None or self._doc_cls is None:
             return []
 
         results: list[RecognizerResult] = []
@@ -761,4 +759,9 @@ def build_recognizer_registry(
             continue
         for recognizer in _build_recognizers_for_definition(recognizer_id, definition):
             registry.add_recognizer(recognizer)
+            try:
+                recognizer.load()
+            except Exception as exc:
+                recognizer_name = str(getattr(recognizer, "name", recognizer_id))
+                raise RuntimeError(f"failed to load recognizer '{recognizer_name}': {exc}") from exc
     return registry

@@ -93,6 +93,7 @@ async def test_startup_skips_embedded_pytriton_in_cpu_mode(monkeypatch: pytest.M
 @pytest.mark.asyncio
 async def test_readyz_requires_embedded_pytriton_when_cuda(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(main.settings, "runtime_mode", "cuda")
+    main.app.state.models_ready = True
     main.app.state.redis = _FakeRedis(ping_result=True)
     main.app.state.embedded_pytriton_manager = _FakeEmbeddedManager(ready=False, error="embedded not ready")
 
@@ -106,11 +107,26 @@ async def test_readyz_requires_embedded_pytriton_when_cuda(monkeypatch: pytest.M
 @pytest.mark.asyncio
 async def test_readyz_passes_without_embedded_pytriton_in_cpu_mode(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(main.settings, "runtime_mode", "cpu")
+    main.app.state.models_ready = True
     main.app.state.redis = _FakeRedis(ping_result=True)
     main.app.state.embedded_pytriton_manager = None
 
     response: dict[str, Any] = await main.readyz()
     assert response == {"status": "ready"}
+
+
+@pytest.mark.asyncio
+async def test_readyz_fails_when_models_not_ready(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(main.settings, "runtime_mode", "cpu")
+    main.app.state.models_ready = False
+    main.app.state.redis = _FakeRedis(ping_result=True)
+    main.app.state.embedded_pytriton_manager = None
+
+    with pytest.raises(HTTPException) as exc:
+        await main.readyz()
+
+    assert exc.value.status_code == 503
+    assert "model runtimes are still loading" in str(exc.value.detail)
 
 
 def test_load_runtime_warms_profiles_in_cpu_mode(monkeypatch: pytest.MonkeyPatch) -> None:

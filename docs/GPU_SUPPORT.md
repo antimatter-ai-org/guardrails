@@ -41,13 +41,14 @@ GLiNER recognizer is always enabled by policy. Nemotron recognizer exists in pol
 - In `cpu` mode:
   - Guardrails process loads model runtimes locally with torch/transformers.
   - Device selection uses `GR_CPU_DEVICE` (`auto` by default; prefers `mps` on Apple Silicon, then `cpu`).
-  - Model loading is lazy/background on first use to keep API startup fast.
+  - Model loading is eager at startup (no lazy/background loading).
 
 - In `cuda` mode:
   - Guardrails runtime adapters use PyTriton client.
   - Embedded PyTriton always hosts `gliner`.
   - Embedded PyTriton hosts `nemotron` only when `GR_ENABLE_NEMOTRON=true`.
   - Guardrails startup performs runtime warm-up and fails fast if model runtime is not ready.
+  - `/readyz` reports ready only after all model runtimes are fully initialized.
 
 ## Local runtime usage
 

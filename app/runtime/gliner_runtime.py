@@ -2,8 +2,6 @@ from __future__ import annotations
 
 import json
 import re
-import threading
-import time
 from abc import ABC, abstractmethod
 from typing import Any
 
@@ -42,9 +40,8 @@ class LocalCpuGlinerRuntime(GlinerRuntime):
         self._model_name = model_name
         self._chunking = (chunking or GlinerChunkingConfig()).normalized()
         self._model: Any | None = None
-        self._loading_started = False
-        self._loading_lock = threading.Lock()
         self._load_error: str | None = None
+        self._load_model()
 
     def _load_model(self) -> None:
         try:
@@ -61,18 +58,9 @@ class LocalCpuGlinerRuntime(GlinerRuntime):
         except Exception as exc:  # pragma: no cover - network/model availability dependent
             self._load_error = f"gliner model load error: {exc}"
 
-    def _ensure_loading_started(self) -> None:
-        with self._loading_lock:
-            if self._loading_started:
-                return
-            self._loading_started = True
-            thread = threading.Thread(target=self._load_model, daemon=True)
-            thread.start()
-
     def predict_entities(self, text: str, labels: list[str], threshold: float) -> list[dict[str, Any]]:
         if self._model is None:
-            self._ensure_loading_started()
-            return []
+            raise RuntimeError(self._load_error or "gliner runtime is not ready")
         return run_chunked_inference(
             text=text,
             labels=labels,
@@ -82,23 +70,7 @@ class LocalCpuGlinerRuntime(GlinerRuntime):
         )
 
     def warm_up(self, timeout_s: float) -> bool:
-        self._ensure_loading_started()
-        timeout = max(0.0, float(timeout_s))
-        if self._model is not None:
-            return True
-        if self._load_error:
-            return False
-
-        if timeout == 0.0:
-            return self._model is not None
-
-        started = time.monotonic()
-        while (time.monotonic() - started) < timeout:
-            if self._model is not None:
-                return True
-            if self._load_error:
-                return False
-            time.sleep(0.05)
+        _ = timeout_s
         return self._model is not None
 
     def is_ready(self) -> bool:
@@ -109,7 +81,7 @@ class LocalCpuGlinerRuntime(GlinerRuntime):
 
     def _predict_batch(self, texts: list[str], labels: list[str], threshold: float) -> list[list[dict[str, Any]]]:
         if self._model is None:
-            return [[] for _ in texts]
+            raise RuntimeError(self._load_error or "gliner runtime is not ready")
 
         if hasattr(self._model, "inference"):
             try:
@@ -166,6 +138,8 @@ class PyTritonGlinerRuntime(GlinerRuntime):
         return str(output)
 
     def predict_entities(self, text: str, labels: list[str], threshold: float) -> list[dict[str, Any]]:
+        if not self._ready:
+            raise RuntimeError(self._load_error or "pytriton gliner runtime is not ready")
         return run_chunked_inference(
             text=text,
             labels=labels,

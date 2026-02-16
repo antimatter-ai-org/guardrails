@@ -34,7 +34,8 @@ Example response:
 
 ### `GET /readyz`
 
-Readiness probe. Checks service dependencies (Redis).
+Readiness probe. Checks service dependencies and runtime initialization state.
+The endpoint returns `ready` only after all configured model runtimes are fully loaded and warm-up is complete.
 
 Example response:
 

@@ -36,7 +36,10 @@ class PresidioAnalysisService:
 
     def __init__(self, policy_config: PolicyConfig) -> None:
         self._config = policy_config
-        self._registries: dict[str, RecognizerRegistry] = {}
+        self._registries: dict[str, RecognizerRegistry] = {
+            profile_name: self._build_registry(profile_name)
+            for profile_name in sorted(self._config.analyzer_profiles.keys())
+        }
 
     def _build_registry(self, profile_name: str) -> RecognizerRegistry:
         profile = self._config.analyzer_profiles.get(profile_name)
@@ -52,9 +55,7 @@ class PresidioAnalysisService:
         registry = self._registries.get(profile_name)
         if registry is not None:
             return registry
-        registry = self._build_registry(profile_name)
-        self._registries[profile_name] = registry
-        return registry
+        raise KeyError(f"analyzer profile registry not initialized: {profile_name}")
 
     def warm_up_profile_runtimes(self, *, profile_names: list[str], timeout_s: float) -> dict[str, str]:
         errors: dict[str, str] = {}

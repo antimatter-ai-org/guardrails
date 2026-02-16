@@ -10,10 +10,10 @@ This service does not route LLM traffic itself. It exposes a unified guardrails 
 - Reversible masking (`DEIDENTIFY`) and unmasking (`REIDENTIFY`).
 - Streaming reidentification (`apply-stream`) with placeholder split safety.
 - Redis-backed session storage for reversible mappings and stream buffers.
-- RU/EN detector stack (regex + GLiNER + optional Nemotron).
+- RU/EN detector stack (regex + GLiNER + Natasha + optional Nemotron).
 - CPU/CUDA runtime switch:
   - `cpu`: local inference (MPS auto on Apple Silicon when available)
-  - `cuda`: embedded PyTriton runtime managed by Guardrails service
+- `cuda`: embedded PyTriton runtime managed by Guardrails service
 - Air-gapped operation with offline model preload.
 - Manual evaluation framework with cached datasets/splits.
 
@@ -58,6 +58,10 @@ CPU mode:
 CUDA mode:
 - Guardrails starts and manages PyTriton during app startup.
 - PyTriton binds to loopback (`127.0.0.1`) inside the container and is not router-visible.
+
+Startup/readiness:
+- Model runtimes are loaded and warmed up eagerly at startup (no lazy loading).
+- `/readyz` returns ready only after full model initialization completes.
 
 Other key settings:
 - `GR_ENABLE_NEMOTRON=false` (default)
