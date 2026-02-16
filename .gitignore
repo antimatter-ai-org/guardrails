@@ -12,6 +12,7 @@ __pycache__/
 htmlcov/
 .idea/
 .models/
+integrations/litellm_openrouter/model_cache/
 .eval_cache/
 .local/
 reports/evaluations/

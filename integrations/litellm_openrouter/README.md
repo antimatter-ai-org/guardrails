@@ -9,6 +9,7 @@ This integration example demonstrates router-mediated PII masking/unmasking with
 
 Guardrails in this demo has Nemotron enabled (`GR_ENABLE_NEMOTRON=true`) in addition to the default detector stack.
 Because Guardrails performs startup warm-up for model-backed recognizers, initial `guardrails` container boot may take longer than before.
+Model artifacts are persisted in a bind-mounted cache directory (`integrations/litellm_openrouter/model_cache`) so downloads are reused across container recreations.
 
 The router exposes a standard OpenAI-compatible endpoint:
 
@@ -52,6 +53,8 @@ cp integrations/litellm_openrouter/.env.example integrations/litellm_openrouter/
 
 - `OPENROUTER_API_KEY`
 - `LITELLM_MASTER_KEY`
+- `HF_TOKEN` (optional but recommended, speeds up Hugging Face downloads and avoids tighter anonymous limits)
+- `GR_ENABLE_NEMOTRON` (default `true`; set `false` for quicker local smoke runs)
 
 3. Start the full harness:
 
@@ -59,11 +62,25 @@ cp integrations/litellm_openrouter/.env.example integrations/litellm_openrouter/
 docker compose -f integrations/litellm_openrouter/docker-compose.yml --env-file integrations/litellm_openrouter/.env up --build
 ```
 
+Optional cache prefill (recommended before first `up`):
+
+```bash
+docker compose -f integrations/litellm_openrouter/docker-compose.yml --env-file integrations/litellm_openrouter/.env run --rm --no-deps guardrails uv run python -m app.tools.download_models --output-dir /models --policy-path configs/policy.yaml
+```
+
 4. Wait for readiness:
 
 - Router: `http://localhost:4000/health/readiness`
 - Guardrails: `http://localhost:8080/readyz`
 - Open WebUI: `http://localhost:3000`
+
+Guardrails model cache details:
+
+- Host path: `/Users/oleg/Projects/_antimatter/guardrails/integrations/litellm_openrouter/model_cache`
+- Container path: `/models`
+- `GR_MODEL_DIR=/models` is set in compose, so all Hugging Face caches/models survive container recreation.
+- Optional offline demo mode: set `GR_OFFLINE_MODE=true` only after the cache has already been populated.
+- On the first run (cold cache), Guardrails can spend several minutes downloading/loading models before `/readyz` becomes healthy.
 
 `OPENAI_API_KEY` in Open WebUI is wired automatically from `LITELLM_MASTER_KEY`, so no second token setup is needed.
 Open WebUI runs with `OFFLINE_MODE=true` in this compose to avoid background model downloads and keep startup predictable.

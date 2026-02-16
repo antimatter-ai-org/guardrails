@@ -14,9 +14,13 @@ services:
     environment:
       GR_REDIS_URL: redis://redis:6379/0
       GR_RUNTIME_MODE: cpu
-      GR_ENABLE_NEMOTRON: "true"
+      GR_ENABLE_NEMOTRON: ${GR_ENABLE_NEMOTRON:-true}
       GR_PYTRITON_INIT_TIMEOUT_S: "240"
       GR_LOG_LEVEL: DEBUG
+      GR_MODEL_DIR: /models
+      GR_OFFLINE_MODE: ${GR_OFFLINE_MODE:-false}
+      HF_TOKEN: ${HF_TOKEN:-}
+      HUGGINGFACE_HUB_TOKEN: ${HF_TOKEN:-}
     depends_on:
       redis:
         condition: service_healthy
@@ -24,9 +28,12 @@ services:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/readyz', timeout=3).read()"]
       interval: 10s
       timeout: 5s
-      retries: 12
+      retries: 90
+      start_period: 30s
     ports:
       - "8080:8080"
+    volumes:
+      - ./model_cache:/models
 
   router:
     build:
@@ -49,7 +56,8 @@ services:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:4000/health/readiness', timeout=3).read()"]
       interval: 10s
       timeout: 5s
-      retries: 12
+      retries: 30
+      start_period: 10s
     ports:
       - "4000:4000"
 

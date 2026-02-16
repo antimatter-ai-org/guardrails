@@ -8,6 +8,7 @@ import regex as re
 from presidio_analyzer import EntityRecognizer, Pattern, PatternRecognizer, RecognizerRegistry, RecognizerResult
 
 from app.config import RecognizerDefinition
+from app.model_assets import resolve_gliner_model_source, resolve_token_classifier_model_source
 from app.runtime.gliner_runtime import build_gliner_runtime
 from app.runtime.token_classifier_runtime import build_token_classifier_runtime
 from app.settings import settings
@@ -645,6 +646,11 @@ def _build_gliner_recognizers(
     if not labels:
         return []
     model_name = str(params.get("model_name", "urchade/gliner_multi-v2.1"))
+    model_source = resolve_gliner_model_source(
+        model_name=model_name,
+        model_dir=settings.model_dir,
+        strict=settings.offline_mode,
+    )
     threshold = float(params.get("threshold", 0.62))
     triton_model_name = str(params.get("triton_model_name", "gliner"))
     chunking = params.get("chunking", {})
@@ -652,7 +658,7 @@ def _build_gliner_recognizers(
         GlinerPresidioRecognizer(
             name=recognizer_id,
             supported_language=_PRESIDIO_COMPAT_LANGUAGE,
-            model_name=model_name,
+            model_name=model_source,
             labels=labels,
             threshold=threshold,
             triton_model_name=triton_model_name,
@@ -670,6 +676,11 @@ def _build_token_classifier_recognizers(
 
     params = definition.params
     model_name = str(params.get("model_name", "scanpatch/pii-ner-nemotron"))
+    model_source = resolve_token_classifier_model_source(
+        model_name=model_name,
+        model_dir=settings.model_dir,
+        strict=settings.offline_mode,
+    )
     threshold = float(params.get("threshold", 0.56))
     aggregation_strategy = str(params.get("aggregation_strategy", "simple"))
     triton_model_name = str(params.get("triton_model_name", "nemotron"))
@@ -683,7 +694,7 @@ def _build_token_classifier_recognizers(
         TokenClassifierPresidioRecognizer(
             name=recognizer_id,
             supported_language=_PRESIDIO_COMPAT_LANGUAGE,
-            model_name=model_name,
+            model_name=model_source,
             threshold=threshold,
             labels=labels,
             label_mapping=label_mapping,
