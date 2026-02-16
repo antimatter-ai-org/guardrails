@@ -1,0 +1,51 @@
+services:
+  redis:
+    image: redis:7.2-alpine
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 15
+
+  guardrails:
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+    environment:
+      GR_REDIS_URL: redis://redis:6379/0
+      GR_RUNTIME_MODE: cpu
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/readyz', timeout=3).read()"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    ports:
+      - "8080:8080"
+
+  router:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    env_file:
+      - .env
+    environment:
+      OPENROUTER_MODEL: ${OPENROUTER_MODEL:-openrouter/openai/gpt-4o-mini}
+      GUARDRAILS_URL: ${GUARDRAILS_URL:-http://guardrails:8080}
+      GUARDRAILS_POLICY_ID: ${GUARDRAILS_POLICY_ID:-external_default}
+      GUARDRAILS_TIMEOUT_S: ${GUARDRAILS_TIMEOUT_S:-15}
+      GUARDRAILS_OUTPUT_SCOPE: ${GUARDRAILS_OUTPUT_SCOPE:-FULL}
+    depends_on:
+      guardrails:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:4000/health/readiness', timeout=3).read()"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    ports:
+      - "4000:4000"

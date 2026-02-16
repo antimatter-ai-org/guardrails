@@ -1,0 +1,131 @@
+{
+  "info": {
+    "name": "Guardrails + LiteLLM + OpenRouter PoC",
+    "_postman_id": "f38bf6aa-5ce2-47eb-b927-fcf02bf57501",
+    "description": "PoC collection for router-mediated masking/unmasking via Guardrails service.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "Router Health",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{router_base_url}}/health/readiness",
+          "host": [
+            "{{router_base_url}}"
+          ],
+          "path": [
+            "health",
+            "readiness"
+          ]
+        }
+      }
+    },
+    {
+      "name": "Non-stream completion (PII echo demo)",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{router_api_key}}",
+            "type": "text"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json",
+            "type": "text"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"model\": \"{{demo_model}}\",\n  \"stream\": false,\n  \"temperature\": 0,\n  \"messages\": [\n    {\n      \"role\": \"user\",\n      \"content\": \"My contact data: email ivan.petrov@example.com and passport 4510 667788.\"\n    },\n    {\n      \"role\": \"user\",\n      \"content\": \"Repeat exactly the email and passport from my previous sentence with no normalization.\"\n    }\n  ]\n}"
+        },
+        "url": {
+          "raw": "{{router_base_url}}/v1/chat/completions",
+          "host": [
+            "{{router_base_url}}"
+          ],
+          "path": [
+            "v1",
+            "chat",
+            "completions"
+          ]
+        }
+      }
+    },
+    {
+      "name": "Streaming completion (PII echo demo)",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{router_api_key}}",
+            "type": "text"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json",
+            "type": "text"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"model\": \"{{demo_model}}\",\n  \"stream\": true,\n  \"temperature\": 0,\n  \"messages\": [\n    {\n      \"role\": \"user\",\n      \"content\": \"Use these values exactly as written: email ivan.petrov@example.com and passport 4510 667788.\"\n    },\n    {\n      \"role\": \"user\",\n      \"content\": \"Return 5 numbered lines; every line must include both values exactly as written.\"\n    }\n  ]\n}"
+        },
+        "url": {
+          "raw": "{{router_base_url}}/v1/chat/completions",
+          "host": [
+            "{{router_base_url}}"
+          ],
+          "path": [
+            "v1",
+            "chat",
+            "completions"
+          ]
+        }
+      }
+    },
+    {
+      "name": "Guardrails capabilities (direct)",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{guardrails_base_url}}/v1/guardrails/capabilities",
+          "host": [
+            "{{guardrails_base_url}}"
+          ],
+          "path": [
+            "v1",
+            "guardrails",
+            "capabilities"
+          ]
+        }
+      }
+    },
+    {
+      "name": "Guardrails session finalize (manual debug)",
+      "request": {
+        "method": "POST",
+        "header": [],
+        "url": {
+          "raw": "{{guardrails_base_url}}/v1/guardrails/sessions/{{session_id}}/finalize",
+          "host": [
+            "{{guardrails_base_url}}"
+          ],
+          "path": [
+            "v1",
+            "guardrails",
+            "sessions",
+            "{{session_id}}",
+            "finalize"
+          ]
+        }
+      }
+    }
+  ]
+}

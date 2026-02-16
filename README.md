@@ -160,6 +160,18 @@ docker run --rm --gpus all -p 8080:8080 \
   guardrails:cuda
 ```
 
+## Router PoC Integration
+
+OpenRouter + LiteLLM integration harness (with Guardrails callback and Postman assets):
+
+- `/Users/oleg/Projects/_antimatter/guardrails/integrations/litellm_openrouter/README.md`
+
+Run with one command:
+
+```bash
+docker compose -f integrations/litellm_openrouter/docker-compose.yml --env-file integrations/litellm_openrouter/.env up --build
+```
+
 ## Key Files
 
 - `/Users/oleg/Projects/_antimatter/guardrails/app/main.py`: HTTP API
