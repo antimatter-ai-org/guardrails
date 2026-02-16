@@ -50,3 +50,24 @@ services:
       retries: 12
     ports:
       - "4000:4000"
+
+  open-webui:
+    image: ghcr.io/open-webui/open-webui:main
+    environment:
+      OPENAI_API_BASE_URL: http://router:4000/v1
+      OPENAI_API_KEY: ${LITELLM_MASTER_KEY}
+      WEBUI_AUTH: "False"
+      OFFLINE_MODE: "true"
+      RAG_EMBEDDING_MODEL_AUTO_UPDATE: "false"
+      RAG_RERANKING_MODEL_AUTO_UPDATE: "false"
+      WHISPER_MODEL_AUTO_UPDATE: "false"
+    depends_on:
+      router:
+        condition: service_healthy
+    ports:
+      - "3000:8080"
+    volumes:
+      - open-webui-data:/app/backend/data
+
+volumes:
+  open-webui-data:

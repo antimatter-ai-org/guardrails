@@ -4,6 +4,7 @@ This integration example demonstrates router-mediated PII masking/unmasking with
 
 - Guardrails service (unmodified CPU image from this repo)
 - LiteLLM proxy router
+- Open WebUI (pre-configured to use LiteLLM)
 - OpenRouter upstream model
 
 The router exposes a standard OpenAI-compatible endpoint:
@@ -14,7 +15,8 @@ The router exposes a standard OpenAI-compatible endpoint:
 
 ```mermaid
 flowchart LR
-    C["Postman / OpenAI SDK"] --> R["LiteLLM Router (:4000)"]
+    U["Open WebUI (:3000)"] --> R["LiteLLM Router (:4000)"]
+    C["Postman / OpenAI SDK"] --> R
     R -->|pre-call: DEIDENTIFY| G["Guardrails API (:8080)"]
     R -->|masked request| O["OpenRouter"]
     O -->|masked response| R
@@ -58,6 +60,18 @@ docker compose -f integrations/litellm_openrouter/docker-compose.yml --env-file 
 
 - Router: `http://localhost:4000/health/readiness`
 - Guardrails: `http://localhost:8080/readyz`
+- Open WebUI: `http://localhost:3000`
+
+`OPENAI_API_KEY` in Open WebUI is wired automatically from `LITELLM_MASTER_KEY`, so no second token setup is needed.
+Open WebUI runs with `OFFLINE_MODE=true` in this compose to avoid background model downloads and keep startup predictable.
+
+## Open WebUI Demo
+
+1. Open `http://localhost:3000`.
+2. Start a chat (auth is disabled in this demo compose).
+3. Pick model `demo-openrouter`.
+4. Send a prompt with PII and ask model to repeat values exactly.
+5. Verify response contains original values, while Guardrails logs show masking/unmasking stages.
 
 ## Postman Demo
 
