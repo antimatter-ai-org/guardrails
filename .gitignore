@@ -3,12 +3,14 @@ __pycache__/
 .pytest_cache/
 .venv/
 .env
+.env.*
+!.env.example
+!.env.eval.example
 .DS_Store
 .coverage
 htmlcov/
 .idea/
 .models/
-.env.eval
 .eval_cache/
 reports/evaluations/
 reports/finetune/
