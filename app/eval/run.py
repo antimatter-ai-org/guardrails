@@ -19,6 +19,7 @@ from app.eval.report import build_report_payload, metrics_payload, write_report_
 from app.eval.script_profile import classify_script_profile
 from app.eval.types import EvalSample, EvalSpan
 from app.model_assets import apply_model_env
+from app.settings import settings
 
 
 def _parse_args() -> argparse.Namespace:
@@ -213,6 +214,21 @@ def _as_eval_spans(detections: list[Any]) -> list[EvalSpan]:
     return spans
 
 
+def _warm_up_runtime_models(
+    *,
+    service: PresidioAnalysisService,
+    policy_name: str,
+    analyzer_profile: str,
+    timeout_s: float,
+) -> None:
+    warmup_errors = service.warm_up_profile_runtimes(
+        profile_names=[analyzer_profile],
+        timeout_s=timeout_s,
+    )
+    if warmup_errors:
+        raise RuntimeError(f"model runtime warm-up failed for policy '{policy_name}': {warmup_errors}")
+
+
 def main() -> int:
     args = _parse_args()
     load_env_file(args.env_file)
@@ -228,6 +244,12 @@ def main() -> int:
     apply_model_env(model_dir=os.getenv("GR_MODEL_DIR"), offline_mode=os.getenv("GR_OFFLINE_MODE", "").lower() in {"1", "true", "yes", "on"})
 
     service = PresidioAnalysisService(config)
+    _warm_up_runtime_models(
+        service=service,
+        policy_name=policy_name,
+        analyzer_profile=policy.analyzer_profile,
+        timeout_s=settings.pytriton_init_timeout_s,
+    )
     dataset_names = args.dataset or list_supported_datasets()
 
     run_started = time.perf_counter()
