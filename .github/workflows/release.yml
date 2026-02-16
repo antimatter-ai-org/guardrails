@@ -1,0 +1,80 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Ensure tag commit is on main
+        run: |
+          git fetch origin main --depth=1
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" "origin/main"; then
+            echo "Tag commit is not reachable from main: $GITHUB_SHA"
+            exit 1
+          fi
+
+      - name: Read tag version
+        id: tagName
+        uses: olegtarasov/get-tag@v2.1.4
+        with:
+          tagRegex: "^v(.*)$"
+          tagRegexGroup: 1
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push CPU image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/guardrails-cpu:${{ steps.tagName.outputs.tag }}
+            ghcr.io/${{ github.repository_owner }}/guardrails-cpu:v${{ steps.tagName.outputs.tag }}
+          labels: |
+            org.opencontainers.image.title=guardrails-cpu
+            org.opencontainers.image.version=${{ steps.tagName.outputs.tag }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+
+      - name: Build and push CUDA image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile.cuda
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/guardrails-cuda:${{ steps.tagName.outputs.tag }}
+            ghcr.io/${{ github.repository_owner }}/guardrails-cuda:v${{ steps.tagName.outputs.tag }}
+          labels: |
+            org.opencontainers.image.title=guardrails-cuda
+            org.opencontainers.image.version=${{ steps.tagName.outputs.tag }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+
+      - name: Publish GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.tagName.outputs.tag }}
+          name: v${{ steps.tagName.outputs.tag }}
+          body_path: RELEASE.md
