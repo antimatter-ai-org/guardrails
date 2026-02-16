@@ -10,7 +10,7 @@ This service does not route LLM traffic itself. It exposes a unified guardrails 
 - Reversible masking (`DEIDENTIFY`) and unmasking (`REIDENTIFY`).
 - Streaming reidentification (`apply-stream`) with placeholder split safety.
 - Redis-backed session storage for reversible mappings and stream buffers.
-- RU/EN detector stack (regex + GLiNER + Natasha + optional Nemotron).
+- RU/EN detector stack (regex + GLiNER + optional Nemotron; Natasha available but disabled by default).
 - CPU/CUDA runtime switch:
   - `cpu`: local inference (MPS auto on Apple Silicon when available)
 - `cuda`: embedded PyTriton runtime managed by Guardrails service
@@ -106,6 +106,9 @@ Run one dataset:
 ```bash
 uv run --extra eval python -m app.eval.run --dataset scanpatch/pii-ner-corpus-synthetic-controlled --split test --env-file .env.eval
 ```
+
+Decision trail for major detector/evaluation changes:
+- `/Users/oleg/Projects/_antimatter/guardrails/docs/DECISIONS.md`
 
 ## Local Development
 

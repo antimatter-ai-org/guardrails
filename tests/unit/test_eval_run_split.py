@@ -53,3 +53,51 @@ def test_resolve_dataset_split_allows_synthetic_test_split(monkeypatch) -> None:
 
     assert split == "test"
     assert available == ["train"]
+
+
+def test_dataset_regression_gate_triggers_for_low_rubai_person_metrics() -> None:
+    dataset_report = {
+        "name": "BoburAmirov/rubai-NER-150K-Personal",
+        "split": "test",
+        "metrics": {
+            "per_label_exact": {
+                "person": {
+                    "precision": 0.11,
+                    "f1": 0.19,
+                }
+            }
+        },
+    }
+
+    failures = eval_run._dataset_regression_failures(
+        dataset_report=dataset_report,
+        requested_split="test",
+        max_samples=None,
+    )
+
+    assert len(failures) == 2
+    assert "person precision" in failures[0]
+    assert "person f1" in failures[1]
+
+
+def test_dataset_regression_gate_is_skipped_for_sampled_runs() -> None:
+    dataset_report = {
+        "name": "BoburAmirov/rubai-NER-150K-Personal",
+        "split": "test",
+        "metrics": {
+            "per_label_exact": {
+                "person": {
+                    "precision": 0.0,
+                    "f1": 0.0,
+                }
+            }
+        },
+    }
+
+    failures = eval_run._dataset_regression_failures(
+        dataset_report=dataset_report,
+        requested_split="test",
+        max_samples=500,
+    )
+
+    assert failures == []

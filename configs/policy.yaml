@@ -36,7 +36,6 @@ analyzer_profiles:
         - code_secret_regex
         - high_entropy_secret
         - gliner_pii_multilingual
-        - natasha_ner_ru
         - nemotron_pii_token_classifier
 
   strict_profile:
@@ -300,7 +299,7 @@ recognizer_definitions:
 
   natasha_ner_ru:
     type: natasha_ner
-    enabled: true
+    enabled: false
     params:
       score: 0.88
       drop_prompt_imperatives: true
@@ -332,12 +331,6 @@ recognizer_definitions:
         - "ip"
         - "military_individual_number"
         - "mobile_phone"
-        - "name"
-        - "first_name"
-        - "last_name"
-        - "middle_name"
-        - "name_initials"
-        - "nickname"
         - "snils"
         - "tin"
         - "vehicle_number"
@@ -359,12 +352,6 @@ recognizer_definitions:
         ip: IP_ADDRESS
         military_individual_number: DOCUMENT_NUMBER
         mobile_phone: PHONE_NUMBER
-        name: PERSON
-        first_name: PERSON
-        last_name: PERSON
-        middle_name: PERSON
-        name_initials: PERSON
-        nickname: PERSON
         snils: DOCUMENT_NUMBER
         tin: TIN
         vehicle_number: DOCUMENT_NUMBER
@@ -375,12 +362,10 @@ recognizer_definitions:
         EMAIL_ADDRESS: 0.72
         IP_ADDRESS: 0.85
         PHONE_NUMBER: 0.78
-        PERSON: 0.70
         TIN: 0.88
       raw_label_thresholds:
         address_geolocation: 0.90
         address: 0.84
-        nickname: 0.78
       chunking:
         enabled: true
         max_tokens: 320

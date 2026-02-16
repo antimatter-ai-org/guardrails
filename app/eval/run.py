@@ -21,6 +21,15 @@ from app.eval.types import EvalSample, EvalSpan
 from app.model_assets import apply_model_env
 from app.settings import settings
 
+_RUBAI_DATASET_NAME = "BoburAmirov/rubai-NER-150K-Personal"
+_DATASET_REGRESSION_GATES: dict[str, dict[str, float | str]] = {
+    _RUBAI_DATASET_NAME: {
+        "split": "test",
+        "person_exact_min_precision": 0.30,
+        "person_exact_min_f1": 0.35,
+    }
+}
+
 
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run manual guardrails evaluation on public datasets.")
@@ -229,6 +238,50 @@ def _ensure_runtime_models_ready(
         raise RuntimeError(f"model runtime readiness check failed for policy '{policy_name}': {readiness_errors}")
 
 
+def _dataset_regression_failures(
+    *,
+    dataset_report: dict[str, Any],
+    requested_split: str,
+    max_samples: int | None,
+) -> list[str]:
+    if max_samples is not None:
+        return []
+
+    gate = _DATASET_REGRESSION_GATES.get(str(dataset_report.get("name", "")))
+    if gate is None:
+        return []
+
+    gate_split = str(gate.get("split", requested_split))
+    if str(dataset_report.get("split")) != gate_split or requested_split != gate_split:
+        return []
+
+    person_metrics = (
+        dataset_report.get("metrics", {})
+        .get("per_label_exact", {})
+        .get("person")
+    )
+    if not isinstance(person_metrics, dict):
+        return [f"dataset={dataset_report.get('name')} missing person exact metrics"]
+
+    failures: list[str] = []
+    precision = float(person_metrics.get("precision", 0.0))
+    f1 = float(person_metrics.get("f1", 0.0))
+
+    min_precision = float(gate.get("person_exact_min_precision", 0.0))
+    min_f1 = float(gate.get("person_exact_min_f1", 0.0))
+    if precision < min_precision:
+        failures.append(
+            f"dataset={dataset_report.get('name')} split={dataset_report.get('split')} "
+            f"person precision {precision:.6f} < {min_precision:.6f}"
+        )
+    if f1 < min_f1:
+        failures.append(
+            f"dataset={dataset_report.get('name')} split={dataset_report.get('split')} "
+            f"person f1 {f1:.6f} < {min_f1:.6f}"
+        )
+    return failures
+
+
 def main() -> int:
     args = _parse_args()
     load_env_file(args.env_file)
@@ -258,6 +311,7 @@ def main() -> int:
     all_errors: list[dict[str, Any]] = []
     dataset_reports: list[dict[str, Any]] = []
     combined_detector_predictions: dict[str, dict[str, list[EvalSpan]]] = defaultdict(dict)
+    regression_gate_failures: list[str] = []
 
     for dataset_name in dataset_names:
         adapter = get_dataset_adapter(dataset_name)
@@ -356,6 +410,13 @@ def main() -> int:
             "detector_breakdown": _detector_breakdown(dataset_samples, detector_predictions),
         }
         dataset_reports.append(dataset_report)
+        regression_gate_failures.extend(
+            _dataset_regression_failures(
+                dataset_report=dataset_report,
+                requested_split=args.split,
+                max_samples=args.max_samples,
+            )
+        )
 
         for sample in dataset_samples:
             combined_samples.append(sample)
@@ -398,6 +459,9 @@ def main() -> int:
     json_path, md_path = write_report_files(report_payload, args.output_dir, report_slug)
 
     print(json.dumps({"report_json": json_path, "report_md": md_path}, ensure_ascii=False))
+    if regression_gate_failures:
+        joined = "; ".join(regression_gate_failures)
+        raise RuntimeError(f"evaluation regression gate failed: {joined}")
     return 0
 
 

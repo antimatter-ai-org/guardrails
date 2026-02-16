@@ -49,6 +49,20 @@ Each run writes:
 
 The JSON report is the source of truth. Markdown is a human summary derived from JSON.
 
+## Built-In Regression Gates
+
+Evaluator enforces a default quality gate for full test-split runs on:
+- `BoburAmirov/rubai-NER-150K-Personal`
+
+Gate thresholds:
+- `per_label_exact.person.precision >= 0.30`
+- `per_label_exact.person.f1 >= 0.35`
+
+Behavior:
+- Gate is evaluated only for full runs (when `--max-samples` is not set).
+- If gate fails, evaluator exits with a non-zero error after writing reports.
+- This is intended to catch severe person-label regressions early.
+
 ## JSON Schema Reference
 
 Top-level payload:
