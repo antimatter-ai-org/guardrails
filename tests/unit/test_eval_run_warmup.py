@@ -44,13 +44,13 @@ class _FakeAdapter:
 
 
 class _WarmupService:
-    def __init__(self, *, warmup_errors: dict[str, str] | None = None) -> None:
-        self.warmup_errors = warmup_errors or {}
-        self.warmup_calls: list[tuple[list[str], float]] = []
+    def __init__(self, *, readiness_errors: dict[str, str] | None = None) -> None:
+        self.readiness_errors = readiness_errors or {}
+        self.readiness_calls: list[tuple[list[str], float]] = []
 
-    def warm_up_profile_runtimes(self, *, profile_names: list[str], timeout_s: float) -> dict[str, str]:
-        self.warmup_calls.append((profile_names, timeout_s))
-        return self.warmup_errors
+    def ensure_profile_runtimes_ready(self, *, profile_names: list[str], timeout_s: float) -> dict[str, str]:
+        self.readiness_calls.append((profile_names, timeout_s))
+        return self.readiness_errors
 
     def analyze_text(self, *, text: str, profile_name: str, policy_min_score: float) -> list[Any]:
         return []
@@ -97,14 +97,14 @@ def test_eval_main_warms_runtime_models_before_processing(
     rc = run.main()
 
     assert rc == 0
-    assert service.warmup_calls == [(["external_rich"], 33.0)]
+    assert service.readiness_calls == [(["external_rich"], 33.0)]
 
 
-def test_eval_main_fails_fast_when_runtime_warmup_fails(
+def test_eval_main_fails_fast_when_runtime_readiness_fails(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    service = _WarmupService(warmup_errors={"external_rich:gliner": "runtime is not ready"})
+    service = _WarmupService(readiness_errors={"external_rich:gliner": "runtime is not ready"})
 
     monkeypatch.setattr(run, "_parse_args", lambda: _args(tmp_path))
     monkeypatch.setattr(run, "load_env_file", lambda _path: None)
@@ -115,7 +115,7 @@ def test_eval_main_fails_fast_when_runtime_warmup_fails(
     monkeypatch.setattr(run.settings, "pytriton_init_timeout_s", 17.0)
     monkeypatch.setattr(run, "get_dataset_adapter", lambda _name: (_ for _ in ()).throw(AssertionError("should not load datasets")))
 
-    with pytest.raises(RuntimeError, match="model runtime warm-up failed"):
+    with pytest.raises(RuntimeError, match="model runtime readiness check failed"):
         run.main()
 
-    assert service.warmup_calls == [(["external_rich"], 17.0)]
+    assert service.readiness_calls == [(["external_rich"], 17.0)]

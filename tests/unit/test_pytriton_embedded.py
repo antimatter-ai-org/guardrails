@@ -63,10 +63,18 @@ def _manager_config(url: str = "127.0.0.1:8000") -> EmbeddedPyTritonConfig:
 def test_embedded_pytriton_manager_starts_with_loopback_bindings(monkeypatch: pytest.MonkeyPatch) -> None:
     _install_fake_pytriton(monkeypatch, _FakeTriton)
     _FakeTriton.instances.clear()
+    readiness_calls: list[tuple[str, int, float]] = []
 
     monkeypatch.setattr(pytriton_embedded, "apply_model_env", lambda **kwargs: None)
     monkeypatch.setattr(pytriton_embedded, "resolve_gliner_model_source", lambda **kwargs: "/models/gliner")
     monkeypatch.setattr(pytriton_embedded, "resolve_token_classifier_model_source", lambda **kwargs: "/models/token")
+    monkeypatch.setattr(
+        pytriton_embedded,
+        "wait_for_triton_ready",
+        lambda *, pytriton_url, contracts, timeout_s, poll_interval_s=0.5: readiness_calls.append(
+            (pytriton_url, len(contracts), timeout_s)
+        ),
+    )
     monkeypatch.setattr(
         pytriton_embedded,
         "build_bindings",
@@ -93,6 +101,7 @@ def test_embedded_pytriton_manager_starts_with_loopback_bindings(monkeypatch: py
     assert triton.config.kwargs["http_port"] == 9010
     assert triton.config.kwargs["grpc_port"] == 9101
     assert triton.config.kwargs["metrics_port"] == 9102
+    assert readiness_calls == [("127.0.0.1:9010", 2, 120.0)]
 
     manager.stop()
     manager.stop()
@@ -112,6 +121,7 @@ def test_embedded_pytriton_manager_reports_startup_failure(monkeypatch: pytest.M
     monkeypatch.setattr(pytriton_embedded, "apply_model_env", lambda **kwargs: None)
     monkeypatch.setattr(pytriton_embedded, "resolve_gliner_model_source", lambda **kwargs: "/models/gliner")
     monkeypatch.setattr(pytriton_embedded, "resolve_token_classifier_model_source", lambda **kwargs: "/models/token")
+    monkeypatch.setattr(pytriton_embedded, "wait_for_triton_ready", lambda **kwargs: None)
     monkeypatch.setattr(
         pytriton_embedded,
         "build_bindings",

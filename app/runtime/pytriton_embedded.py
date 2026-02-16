@@ -6,6 +6,7 @@ from typing import Any
 
 from app.model_assets import apply_model_env, resolve_gliner_model_source, resolve_token_classifier_model_source
 from app.pytriton_server.registry import build_bindings
+from app.runtime.triton_readiness import contract_from_binding, parse_pytriton_url, wait_for_triton_ready
 
 
 @dataclass(slots=True)
@@ -20,6 +21,7 @@ class EmbeddedPyTritonConfig:
     enable_nemotron: bool
     grpc_port: int = 8001
     metrics_port: int = 8002
+    readiness_timeout_s: float = 120.0
 
 
 def _is_loopback_host(host: str) -> bool:
@@ -30,36 +32,6 @@ def _is_loopback_host(host: str) -> bool:
         return ipaddress.ip_address(normalized).is_loopback
     except ValueError:
         return False
-
-
-def _parse_pytriton_url(url: str) -> tuple[str, int]:
-    raw = url.strip()
-    if not raw:
-        raise ValueError("GR_PYTRITON_URL must not be empty")
-    if "://" in raw:
-        raw = raw.split("://", 1)[1]
-    raw = raw.split("/", 1)[0]
-    if not raw:
-        raise ValueError(f"invalid GR_PYTRITON_URL: {url!r}")
-
-    if ":" not in raw:
-        host = raw
-        port = 8000
-    else:
-        host, port_raw = raw.rsplit(":", 1)
-        if not port_raw:
-            raise ValueError(f"invalid GR_PYTRITON_URL: {url!r}")
-        try:
-            port = int(port_raw)
-        except ValueError as exc:
-            raise ValueError(f"invalid GR_PYTRITON_URL port: {port_raw!r}") from exc
-
-    if not _is_loopback_host(host):
-        raise ValueError(
-            "embedded PyTriton requires loopback GR_PYTRITON_URL host "
-            f"(got {host!r}); use localhost or 127.0.0.1"
-        )
-    return "127.0.0.1", port
 
 
 class EmbeddedPyTritonManager:
@@ -79,11 +51,18 @@ class EmbeddedPyTritonManager:
             return
 
         try:
-            host, http_port = _parse_pytriton_url(self._config.pytriton_url)
+            host, http_port = parse_pytriton_url(self._config.pytriton_url)
         except ValueError as exc:
             self._last_error = str(exc)
             raise
-        self._client_url = f"{host}:{http_port}"
+        if not _is_loopback_host(host):
+            self._last_error = (
+                "embedded PyTriton requires loopback GR_PYTRITON_URL host "
+                f"(got {host!r}); use localhost or 127.0.0.1"
+            )
+            raise ValueError(self._last_error)
+        normalized_host = "127.0.0.1"
+        self._client_url = f"{normalized_host}:{http_port}"
         self._ready = False
         self._last_error = None
         self._triton = None
@@ -109,6 +88,7 @@ class EmbeddedPyTritonManager:
             max_batch_size=self._config.max_batch_size,
             enable_nemotron=self._config.enable_nemotron,
         )
+        contracts = [contract_from_binding(binding) for binding in bindings]
 
         try:
             from pytriton.triton import Triton, TritonConfig
@@ -120,11 +100,11 @@ class EmbeddedPyTritonManager:
         try:
             triton = Triton(
                 config=TritonConfig(
-                    http_address="127.0.0.1",
+                    http_address=normalized_host,
                     http_port=http_port,
-                    grpc_address="127.0.0.1",
+                    grpc_address=normalized_host,
                     grpc_port=int(self._config.grpc_port),
-                    metrics_address="127.0.0.1",
+                    metrics_address=normalized_host,
                     metrics_port=int(self._config.metrics_port),
                 )
             )
@@ -137,6 +117,11 @@ class EmbeddedPyTritonManager:
                     config=binding.config,
                 )
             triton.run()
+            wait_for_triton_ready(
+                pytriton_url=self._client_url,
+                contracts=contracts,
+                timeout_s=self._config.readiness_timeout_s,
+            )
             self._triton = triton
             self._ready = True
             self._last_error = None

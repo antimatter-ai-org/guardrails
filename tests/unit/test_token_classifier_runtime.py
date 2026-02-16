@@ -67,7 +67,7 @@ def test_normalize_token_classifier_label() -> None:
     assert token_classifier_runtime._normalize_token_classifier_label("organization") == "organization"  # noqa: SLF001
 
 
-def test_local_runtime_warm_up_reflects_constructor_load_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_local_runtime_ensure_ready_reflects_constructor_load_failure(monkeypatch: pytest.MonkeyPatch) -> None:
     def failed_load(self) -> None:  # noqa: ANN001
         self._pipeline = None  # noqa: SLF001
         self._load_error = "load failed"  # noqa: SLF001
@@ -75,12 +75,12 @@ def test_local_runtime_warm_up_reflects_constructor_load_failure(monkeypatch: py
     monkeypatch.setattr(token_classifier_runtime.LocalCpuTokenClassifierRuntime, "_load_model", failed_load)
     runtime = token_classifier_runtime.LocalCpuTokenClassifierRuntime(model_name="dummy")
 
-    assert runtime.warm_up(timeout_s=0.5) is False
+    assert runtime.ensure_ready(timeout_s=0.5) is False
     assert runtime.is_ready() is False
     assert runtime.load_error() == "load failed"
 
 
-def test_pytriton_runtime_predict_requires_warm_up() -> None:
+def test_pytriton_runtime_predict_requires_readiness_check() -> None:
     runtime = token_classifier_runtime.PyTritonTokenClassifierRuntime(
         model_name="nemotron",
         pytriton_url="localhost:8000",
@@ -90,3 +90,23 @@ def test_pytriton_runtime_predict_requires_warm_up() -> None:
 
     with pytest.raises(RuntimeError, match="not ready"):
         runtime.predict_entities("hello", ["email"], threshold=0.5)
+
+
+def test_pytriton_runtime_ensure_ready_success_sets_ready(monkeypatch: pytest.MonkeyPatch) -> None:
+    called: list[tuple[str, int]] = []
+
+    def fake_wait(*, pytriton_url: str, contracts: list[object], timeout_s: float, poll_interval_s: float = 0.5) -> None:
+        called.append((pytriton_url, len(contracts)))
+
+    monkeypatch.setattr(token_classifier_runtime, "wait_for_triton_ready", fake_wait)
+    runtime = token_classifier_runtime.PyTritonTokenClassifierRuntime(
+        model_name="nemotron",
+        pytriton_url="localhost:8000",
+        init_timeout_s=10.0,
+        infer_timeout_s=20.0,
+    )
+
+    assert runtime.ensure_ready(timeout_s=1.0) is True
+    assert runtime.is_ready() is True
+    assert runtime.load_error() is None
+    assert called == [("localhost:8000", 1)]

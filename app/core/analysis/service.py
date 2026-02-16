@@ -57,19 +57,24 @@ class PresidioAnalysisService:
             return registry
         raise KeyError(f"analyzer profile registry not initialized: {profile_name}")
 
-    def warm_up_profile_runtimes(self, *, profile_names: list[str], timeout_s: float) -> dict[str, str]:
+    def ensure_profile_runtimes_ready(self, *, profile_names: list[str], timeout_s: float) -> dict[str, str]:
         errors: dict[str, str] = {}
-        warmup_timeout = max(0.0, float(timeout_s))
+        readiness_timeout = max(0.0, float(timeout_s))
         for profile_name in profile_names:
             registry = self._get_registry(profile_name)
             for recognizer in registry.recognizers:
                 runtime = getattr(recognizer, "_runtime", None)
-                if runtime is None or not hasattr(runtime, "warm_up"):
+                if runtime is None:
                     continue
                 recognizer_name = str(getattr(recognizer, "name", recognizer.__class__.__name__))
                 runtime_key = f"{profile_name}:{recognizer_name}"
                 try:
-                    ready = bool(runtime.warm_up(timeout_s=warmup_timeout))
+                    if hasattr(runtime, "ensure_ready"):
+                        ready = bool(runtime.ensure_ready(timeout_s=readiness_timeout))
+                    elif hasattr(runtime, "is_ready"):
+                        ready = bool(runtime.is_ready())
+                    else:
+                        continue
                 except Exception as exc:
                     errors[runtime_key] = str(exc)
                     continue

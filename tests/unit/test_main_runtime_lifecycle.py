@@ -135,7 +135,7 @@ def test_load_runtime_warms_profiles_in_cpu_mode(monkeypatch: pytest.MonkeyPatch
             self.config = config
             self.calls: list[tuple[list[str], float]] = []
 
-        def warm_up_profile_runtimes(self, *, profile_names: list[str], timeout_s: float) -> dict[str, str]:
+        def ensure_profile_runtimes_ready(self, *, profile_names: list[str], timeout_s: float) -> dict[str, str]:
             self.calls.append((profile_names, timeout_s))
             return {}
 
@@ -162,12 +162,12 @@ def test_load_runtime_warms_profiles_in_cpu_mode(monkeypatch: pytest.MonkeyPatch
     assert fake_analysis.calls == [(["external_rich", "strict_profile"], 21.0)]
 
 
-def test_load_runtime_raises_when_warmup_fails(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_load_runtime_raises_when_runtime_readiness_fails(monkeypatch: pytest.MonkeyPatch) -> None:
     class _FakeAnalysisService:
         def __init__(self, config: Any) -> None:
             self.config = config
 
-        def warm_up_profile_runtimes(self, *, profile_names: list[str], timeout_s: float) -> dict[str, str]:
+        def ensure_profile_runtimes_ready(self, *, profile_names: list[str], timeout_s: float) -> dict[str, str]:
             return {"external_rich:gliner": "runtime is not ready"}
 
     fake_config = type(
@@ -185,5 +185,5 @@ def test_load_runtime_raises_when_warmup_fails(monkeypatch: pytest.MonkeyPatch) 
     monkeypatch.setattr(main, "GuardrailsService", lambda **_kwargs: object())
     main.app.state.mapping_store = object()
 
-    with pytest.raises(RuntimeError, match="model runtime warm-up failed"):
+    with pytest.raises(RuntimeError, match="model runtime readiness check failed"):
         main._load_runtime()

@@ -13,17 +13,17 @@ class _FakeRuntime:
         self._raises = raises
         self.calls = 0
 
-    def warm_up(self, timeout_s: float) -> bool:
+    def ensure_ready(self, timeout_s: float) -> bool:
         self.calls += 1
         if self._raises:
-            raise RuntimeError("warmup failed")
+            raise RuntimeError("readiness failed")
         return self._ready
 
     def load_error(self) -> str | None:
         return self._error
 
 
-def test_warm_up_profile_runtimes_collects_errors() -> None:
+def test_ensure_profile_runtimes_ready_collects_errors() -> None:
     service = PresidioAnalysisService(
         PolicyConfig(
             default_policy="p1",
@@ -45,10 +45,10 @@ def test_warm_up_profile_runtimes_collects_errors() -> None:
     )
 
     service._registries["profile-a"] = registry  # noqa: SLF001
-    errors = service.warm_up_profile_runtimes(profile_names=["profile-a"], timeout_s=1.0)
+    errors = service.ensure_profile_runtimes_ready(profile_names=["profile-a"], timeout_s=1.0)
 
     assert ok_runtime.calls == 1
     assert bad_runtime.calls == 1
     assert raising_runtime.calls == 1
     assert errors["profile-a:bad"] == "not ready"
-    assert "warmup failed" in errors["profile-a:raising"]
+    assert "readiness failed" in errors["profile-a:raising"]

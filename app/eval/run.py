@@ -214,19 +214,19 @@ def _as_eval_spans(detections: list[Any]) -> list[EvalSpan]:
     return spans
 
 
-def _warm_up_runtime_models(
+def _ensure_runtime_models_ready(
     *,
     service: PresidioAnalysisService,
     policy_name: str,
     analyzer_profile: str,
     timeout_s: float,
 ) -> None:
-    warmup_errors = service.warm_up_profile_runtimes(
+    readiness_errors = service.ensure_profile_runtimes_ready(
         profile_names=[analyzer_profile],
         timeout_s=timeout_s,
     )
-    if warmup_errors:
-        raise RuntimeError(f"model runtime warm-up failed for policy '{policy_name}': {warmup_errors}")
+    if readiness_errors:
+        raise RuntimeError(f"model runtime readiness check failed for policy '{policy_name}': {readiness_errors}")
 
 
 def main() -> int:
@@ -244,7 +244,7 @@ def main() -> int:
     apply_model_env(model_dir=os.getenv("GR_MODEL_DIR"), offline_mode=os.getenv("GR_OFFLINE_MODE", "").lower() in {"1", "true", "yes", "on"})
 
     service = PresidioAnalysisService(config)
-    _warm_up_runtime_models(
+    _ensure_runtime_models_ready(
         service=service,
         policy_name=policy_name,
         analyzer_profile=policy.analyzer_profile,

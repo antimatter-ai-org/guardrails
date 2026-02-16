@@ -47,7 +47,7 @@ GLiNER recognizer is always enabled by policy. Nemotron recognizer exists in pol
   - Guardrails runtime adapters use PyTriton client.
   - Embedded PyTriton always hosts `gliner`.
   - Embedded PyTriton hosts `nemotron` only when `GR_ENABLE_NEMOTRON=true`.
-  - Guardrails startup performs runtime warm-up and fails fast if model runtime is not ready.
+  - Guardrails startup performs deterministic Triton readiness checks (server live/ready, model ready, I/O contract) and fails fast if any enabled model is not ready.
   - `/readyz` reports ready only after all model runtimes are fully initialized.
 
 ## Local runtime usage

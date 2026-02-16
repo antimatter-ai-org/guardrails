@@ -143,7 +143,7 @@ def test_pytriton_runtime_adapts_when_server_requires_smaller_batch(monkeypatch:
     assert len(outputs) == 40
 
 
-def test_local_cpu_runtime_warm_up_reflects_constructor_load_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_local_cpu_runtime_ensure_ready_reflects_constructor_load_failure(monkeypatch: pytest.MonkeyPatch) -> None:
     def failed_load(self) -> None:  # noqa: ANN001
         self._model = None  # noqa: SLF001
         self._load_error = "load failed"  # noqa: SLF001
@@ -151,12 +151,12 @@ def test_local_cpu_runtime_warm_up_reflects_constructor_load_failure(monkeypatch
     monkeypatch.setattr(gliner_runtime.LocalCpuGlinerRuntime, "_load_model", failed_load)
     runtime = gliner_runtime.LocalCpuGlinerRuntime(model_name="dummy")
 
-    assert runtime.warm_up(timeout_s=0.5) is False
+    assert runtime.ensure_ready(timeout_s=0.5) is False
     assert runtime.is_ready() is False
     assert runtime.load_error() == "load failed"
 
 
-def test_local_cpu_runtime_warm_up_is_ready_after_constructor_load(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_local_cpu_runtime_ensure_ready_is_ready_after_constructor_load(monkeypatch: pytest.MonkeyPatch) -> None:
     def successful_load(self) -> None:  # noqa: ANN001
         self._model = object()  # noqa: SLF001
         self._load_error = None  # noqa: SLF001
@@ -164,12 +164,12 @@ def test_local_cpu_runtime_warm_up_is_ready_after_constructor_load(monkeypatch: 
     monkeypatch.setattr(gliner_runtime.LocalCpuGlinerRuntime, "_load_model", successful_load)
     runtime = gliner_runtime.LocalCpuGlinerRuntime(model_name="dummy")
 
-    assert runtime.warm_up(timeout_s=0.5) is True
+    assert runtime.ensure_ready(timeout_s=0.5) is True
     assert runtime.is_ready() is True
     assert runtime.load_error() is None
 
 
-def test_pytriton_runtime_predict_requires_warm_up() -> None:
+def test_pytriton_runtime_predict_requires_readiness_check() -> None:
     runtime = gliner_runtime.PyTritonGlinerRuntime(
         model_name="gliner",
         pytriton_url="localhost:8000",
@@ -181,28 +181,13 @@ def test_pytriton_runtime_predict_requires_warm_up() -> None:
         runtime.predict_entities("hello", ["person"], threshold=0.5)
 
 
-def test_pytriton_runtime_warm_up_success_sets_ready(monkeypatch: pytest.MonkeyPatch) -> None:
-    class FakeModelClient:
-        def __init__(self, **kwargs):
-            self.kwargs = kwargs
+def test_pytriton_runtime_ensure_ready_success_sets_ready(monkeypatch: pytest.MonkeyPatch) -> None:
+    called: list[tuple[str, int]] = []
 
-        def __enter__(self):
-            return self
+    def fake_wait(*, pytriton_url: str, contracts: list[object], timeout_s: float, poll_interval_s: float = 0.5) -> None:
+        called.append((pytriton_url, len(contracts)))
 
-        def __exit__(self, exc_type, exc, tb):
-            return None
-
-        def infer_batch(self, *, text, labels_json, threshold):
-            payload = np.array([[b"[]"]], dtype=object)
-            return {"detections_json": payload}
-
-    fake_client_module = types.ModuleType("pytriton.client")
-    fake_client_module.ModelClient = FakeModelClient
-    fake_package = types.ModuleType("pytriton")
-    fake_package.client = fake_client_module
-    monkeypatch.setitem(sys.modules, "pytriton", fake_package)
-    monkeypatch.setitem(sys.modules, "pytriton.client", fake_client_module)
-
+    monkeypatch.setattr(gliner_runtime, "wait_for_triton_ready", fake_wait)
     runtime = gliner_runtime.PyTritonGlinerRuntime(
         model_name="gliner",
         pytriton_url="localhost:8000",
@@ -210,6 +195,7 @@ def test_pytriton_runtime_warm_up_success_sets_ready(monkeypatch: pytest.MonkeyP
         infer_timeout_s=20.0,
     )
 
-    assert runtime.warm_up(timeout_s=1.0) is True
+    assert runtime.ensure_ready(timeout_s=1.0) is True
     assert runtime.is_ready() is True
     assert runtime.load_error() is None
+    assert called == [("localhost:8000", 1)]

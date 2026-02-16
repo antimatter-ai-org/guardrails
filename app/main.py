@@ -242,6 +242,7 @@ def _build_embedded_pytriton_manager() -> EmbeddedPyTritonManager:
             enable_nemotron=settings.enable_nemotron,
             grpc_port=int(_env("GR_PYTRITON_GRPC_PORT", "8001")),
             metrics_port=int(_env("GR_PYTRITON_METRICS_PORT", "8002")),
+            readiness_timeout_s=settings.pytriton_init_timeout_s,
         )
     )
 
@@ -258,12 +259,12 @@ def _load_runtime() -> None:
         analysis_service=analysis_service,
         mapping_store=app.state.mapping_store,
     )
-    warmup_errors = analysis_service.warm_up_profile_runtimes(
+    readiness_errors = analysis_service.ensure_profile_runtimes_ready(
         profile_names=sorted(config.analyzer_profiles.keys()),
         timeout_s=settings.pytriton_init_timeout_s,
     )
-    if warmup_errors:
-        raise RuntimeError(f"model runtime warm-up failed: {warmup_errors}")
+    if readiness_errors:
+        raise RuntimeError(f"model runtime readiness check failed: {readiness_errors}")
     app.state.models_ready = True
     logger.info(
         "policy loaded from %s, profiles=%s, recognizers=%s",

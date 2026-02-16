@@ -8,6 +8,11 @@ from typing import Any
 import numpy as np
 
 from app.runtime.gliner_chunking import GlinerChunkingConfig, run_chunked_inference
+from app.runtime.triton_readiness import (
+    TritonModelContract,
+    TritonTensorContract,
+    wait_for_triton_ready,
+)
 from app.runtime.torch_runtime import resolve_cpu_runtime_device
 
 
@@ -17,7 +22,7 @@ class TokenClassifierRuntime(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def warm_up(self, timeout_s: float) -> bool:
+    def ensure_ready(self, timeout_s: float) -> bool:
         raise NotImplementedError
 
     @abstractmethod
@@ -150,7 +155,7 @@ class LocalCpuTokenClassifierRuntime(TokenClassifierRuntime):
             predict_batch=self._predict_batch,
         )
 
-    def warm_up(self, timeout_s: float) -> bool:
+    def ensure_ready(self, timeout_s: float) -> bool:
         _ = timeout_s
         return self._pipeline is not None
 
@@ -180,6 +185,15 @@ class PyTritonTokenClassifierRuntime(TokenClassifierRuntime):
         self.device = "cuda"
         self._ready = False
         self._load_error: str | None = None
+        self._contract = TritonModelContract(
+            name=model_name,
+            inputs=(
+                TritonTensorContract(name="text", data_type="TYPE_STRING"),
+                TritonTensorContract(name="threshold", data_type="TYPE_FP32"),
+                TritonTensorContract(name="labels_json", data_type="TYPE_STRING"),
+            ),
+            outputs=(TritonTensorContract(name="detections_json", data_type="TYPE_STRING"),),
+        )
 
     @staticmethod
     def _extract_payload(output: Any) -> str:
@@ -277,35 +291,15 @@ class PyTritonTokenClassifierRuntime(TokenClassifierRuntime):
             predict_batch=self._predict_batch,
         )
 
-    def warm_up(self, timeout_s: float) -> bool:
+    def ensure_ready(self, timeout_s: float) -> bool:
         if self._ready:
             return True
-        timeout = max(0.1, float(timeout_s))
         try:
-            from pytriton.client import ModelClient
-        except Exception as exc:
-            self._load_error = f"pytriton import error: {exc}"
-            return False
-
-        text_batch = np.array([[b"warmup"]], dtype=object)
-        threshold_batch = np.array([[0.5]], dtype=np.float32)
-        labels_batch = np.array([[b"[]"]], dtype=object)
-        init_timeout_s = min(self._init_timeout_s, timeout)
-        infer_timeout_s = min(self._infer_timeout_s, timeout)
-
-        try:
-            with ModelClient(
-                url=self._pytriton_url,
-                model_name=self._model_name,
-                init_timeout_s=init_timeout_s,
-                inference_timeout_s=infer_timeout_s,
-            ) as client:
-                result = client.infer_batch(
-                    text=text_batch,
-                    threshold=threshold_batch,
-                    labels_json=labels_batch,
-                )
-                self._parse_payload(result.get("detections_json", []))
+            wait_for_triton_ready(
+                pytriton_url=self._pytriton_url,
+                contracts=[self._contract],
+                timeout_s=max(0.1, float(timeout_s)),
+            )
             self._ready = True
             self._load_error = None
             return True
