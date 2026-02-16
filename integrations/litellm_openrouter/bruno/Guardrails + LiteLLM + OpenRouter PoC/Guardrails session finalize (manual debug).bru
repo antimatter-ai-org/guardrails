@@ -1,0 +1,15 @@
+meta {
+  name: Guardrails session finalize (manual debug)
+  type: http
+  seq: 5
+}
+
+post {
+  url: {{guardrails_base_url}}/v1/guardrails/sessions/{{session_id}}/finalize
+  body: none
+  auth: inherit
+}
+
+settings {
+  encodeUrl: true
+}

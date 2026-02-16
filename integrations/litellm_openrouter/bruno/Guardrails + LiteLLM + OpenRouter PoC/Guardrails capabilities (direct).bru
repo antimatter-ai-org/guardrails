@@ -1,0 +1,15 @@
+meta {
+  name: Guardrails capabilities (direct)
+  type: http
+  seq: 4
+}
+
+get {
+  url: {{guardrails_base_url}}/v1/guardrails/capabilities
+  body: none
+  auth: inherit
+}
+
+settings {
+  encodeUrl: true
+}

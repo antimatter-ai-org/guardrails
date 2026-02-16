@@ -1,0 +1,15 @@
+meta {
+  name: Router Health
+  type: http
+  seq: 1
+}
+
+get {
+  url: {{router_base_url}}/health/readiness
+  body: none
+  auth: inherit
+}
+
+settings {
+  encodeUrl: true
+}

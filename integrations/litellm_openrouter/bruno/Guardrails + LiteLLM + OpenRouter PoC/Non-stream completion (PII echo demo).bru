@@ -1,0 +1,38 @@
+meta {
+  name: Non-stream completion (PII echo demo)
+  type: http
+  seq: 2
+}
+
+post {
+  url: {{router_base_url}}/v1/chat/completions
+  body: json
+  auth: inherit
+}
+
+headers {
+  Authorization: Bearer {{router_api_key}}
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "model": "{{demo_model}}",
+    "stream": false,
+    "temperature": 0,
+    "messages": [
+      {
+        "role": "user",
+        "content": "My contact data: email ivan.petrov@example.com and passport 4510 667788."
+      },
+      {
+        "role": "user",
+        "content": "Repeat exactly the email and passport from my previous sentence with no normalization."
+      }
+    ]
+  }
+}
+
+settings {
+  encodeUrl: true
+}
