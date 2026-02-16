@@ -17,6 +17,6 @@ RUN uv sync --frozen --no-dev --extra cuda
 
 ENV PATH="/app/.venv/bin:$PATH"
 
-EXPOSE 8000 8001 8002
+EXPOSE 8080
 
-CMD ["python", "-m", "app.pytriton_server.main"]
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8080"]

@@ -1,4 +1,4 @@
-.PHONY: sync deps-up deps-down dev-up dev-down run-api run-pytriton test-unit test-integration test-all download-models check-models eval-all eval-scanpatch
+.PHONY: sync deps-up deps-down dev-up dev-down run-api run-pytriton run-pytriton-debug test-unit test-integration test-all download-models check-models eval-all eval-scanpatch
 
 MODELS_DIR ?= ./.models
 POLICY_PATH ?= ./configs/policy.yaml
@@ -25,8 +25,10 @@ deps-up: dev-up
 run-api:
 	uv run --extra dev uvicorn app.main:app --host 0.0.0.0 --port 8080
 
-run-pytriton:
+run-pytriton-debug:
 	uv run --extra cuda python -m app.pytriton_server.main
+
+run-pytriton: run-pytriton-debug
 
 dev-down:
 	docker compose down --remove-orphans

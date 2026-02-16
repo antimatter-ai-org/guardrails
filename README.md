@@ -13,7 +13,7 @@ This service does not route LLM traffic itself. It exposes a unified guardrails 
 - RU/EN detector stack (regex + GLiNER + optional Nemotron).
 - CPU/CUDA runtime switch:
   - `cpu`: local inference (MPS auto on Apple Silicon when available)
-  - `cuda`: model inference via PyTriton
+  - `cuda`: embedded PyTriton runtime managed by Guardrails service
 - Air-gapped operation with offline model preload.
 - Manual evaluation framework with cached datasets/splits.
 
@@ -56,12 +56,13 @@ CPU mode:
 - `GR_CPU_DEVICE=auto` chooses `mps` on Apple Silicon when available, otherwise `cpu`.
 
 CUDA mode:
-- Guardrails uses PyTriton client adapters.
-- Run PyTriton server separately: `python -m app.pytriton_server.main`
+- Guardrails starts and manages PyTriton during app startup.
+- PyTriton binds to loopback (`127.0.0.1`) inside the container and is not router-visible.
 
 Other key settings:
 - `GR_ENABLE_NEMOTRON=false` (default)
 - `GR_ALLOW_MISSING_REIDENTIFY_SESSION=false` (default fail-closed for missing session)
+- `GR_PYTRITON_URL=127.0.0.1:8000` (internal endpoint used by runtime adapters)
 
 ## Air-Gapped Models
 
@@ -129,18 +130,35 @@ Run API:
 make run-api
 ```
 
-Run PyTriton server (CUDA hosts):
-
-```bash
-make run-pytriton
-```
-
 ## Docker
 
-- `Dockerfile`: Guardrails API image
-- `Dockerfile.cuda`: PyTriton CUDA image
+- `Dockerfile`: Guardrails service `cpu` flavor (CPU + Apple Silicon MPS path)
+- `Dockerfile.cuda`: Guardrails service `cuda` flavor (embedded PyTriton + CUDA)
 
 `docker-compose.yml` is for dependencies only (Redis).
+
+Suggested image tags:
+- `guardrails:cpu`
+- `guardrails:cuda`
+
+CPU/MPS container:
+
+```bash
+docker build -f Dockerfile -t guardrails:cpu .
+docker run --rm -p 8080:8080 \
+  -e GR_REDIS_URL=redis://host.docker.internal:6379/0 \
+  guardrails:cpu
+```
+
+CUDA container:
+
+```bash
+docker build -f Dockerfile.cuda -t guardrails:cuda .
+docker run --rm --gpus all -p 8080:8080 \
+  -e GR_RUNTIME_MODE=cuda \
+  -e GR_REDIS_URL=redis://host.docker.internal:6379/0 \
+  guardrails:cuda
+```
 
 ## Key Files
 

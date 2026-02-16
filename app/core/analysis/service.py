@@ -56,6 +56,33 @@ class PresidioAnalysisService:
         self._registries[profile_name] = registry
         return registry
 
+    def warm_up_profile_runtimes(self, *, profile_names: list[str], timeout_s: float) -> dict[str, str]:
+        errors: dict[str, str] = {}
+        warmup_timeout = max(0.0, float(timeout_s))
+        for profile_name in profile_names:
+            registry = self._get_registry(profile_name)
+            for recognizer in registry.recognizers:
+                runtime = getattr(recognizer, "_runtime", None)
+                if runtime is None or not hasattr(runtime, "warm_up"):
+                    continue
+                recognizer_name = str(getattr(recognizer, "name", recognizer.__class__.__name__))
+                runtime_key = f"{profile_name}:{recognizer_name}"
+                try:
+                    ready = bool(runtime.warm_up(timeout_s=warmup_timeout))
+                except Exception as exc:
+                    errors[runtime_key] = str(exc)
+                    continue
+                if ready:
+                    continue
+                load_error = None
+                if hasattr(runtime, "load_error"):
+                    try:
+                        load_error = runtime.load_error()
+                    except Exception:
+                        load_error = None
+                errors[runtime_key] = str(load_error or "runtime is not ready")
+        return errors
+
     @staticmethod
     def _result_threshold(*, policy_min_score: float) -> float:
         return float(policy_min_score)

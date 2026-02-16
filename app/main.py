@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import os
 from datetime import UTC, datetime, timedelta
 from time import perf_counter
 from typing import Any
@@ -37,6 +38,7 @@ from app.models.api import (
     UsageInfo,
 )
 from app.policy import PolicyResolver
+from app.runtime.pytriton_embedded import EmbeddedPyTritonConfig, EmbeddedPyTritonManager
 from app.settings import settings
 from app.storage.redis_store import RedisMappingStore
 
@@ -159,6 +161,27 @@ def _resolve_policy_name(policy_id: str | None) -> str:
     return resolved_name
 
 
+def _env(name: str, default: str) -> str:
+    return os.getenv(name, default)
+
+
+def _build_embedded_pytriton_manager() -> EmbeddedPyTritonManager:
+    return EmbeddedPyTritonManager(
+        EmbeddedPyTritonConfig(
+            pytriton_url=settings.pytriton_url,
+            gliner_model_ref=_env("GR_PYTRITON_GLINER_MODEL_REF", "urchade/gliner_multi-v2.1"),
+            token_model_ref=_env("GR_PYTRITON_TOKEN_MODEL_REF", "scanpatch/pii-ner-nemotron"),
+            model_dir=settings.model_dir,
+            offline_mode=settings.offline_mode,
+            device=_env("GR_PYTRITON_DEVICE", "cuda"),
+            max_batch_size=int(_env("GR_PYTRITON_MAX_BATCH_SIZE", "32")),
+            enable_nemotron=settings.enable_nemotron,
+            grpc_port=int(_env("GR_PYTRITON_GRPC_PORT", "8001")),
+            metrics_port=int(_env("GR_PYTRITON_METRICS_PORT", "8002")),
+        )
+    )
+
+
 def _load_runtime() -> None:
     config = load_policy_config(settings.policy_path)
     resolver = PolicyResolver(config)
@@ -171,6 +194,13 @@ def _load_runtime() -> None:
         analysis_service=analysis_service,
         mapping_store=app.state.mapping_store,
     )
+    if settings.runtime_mode == "cuda":
+        warmup_errors = analysis_service.warm_up_profile_runtimes(
+            profile_names=sorted(config.analyzer_profiles.keys()),
+            timeout_s=settings.pytriton_init_timeout_s,
+        )
+        if warmup_errors:
+            raise RuntimeError(f"model runtime warm-up failed: {warmup_errors}")
     logger.info(
         "policy loaded from %s, profiles=%s, recognizers=%s",
         settings.policy_path,
@@ -182,14 +212,31 @@ def _load_runtime() -> None:
 @app.on_event("startup")
 async def startup() -> None:
     apply_model_env(model_dir=settings.model_dir, offline_mode=settings.offline_mode)
-    app.state.redis = Redis.from_url(settings.redis_url, decode_responses=False)
-    app.state.mapping_store = RedisMappingStore(app.state.redis)
-    _load_runtime()
+    manager: EmbeddedPyTritonManager | None = None
+    try:
+        if settings.runtime_mode == "cuda":
+            manager = _build_embedded_pytriton_manager()
+            manager.start()
+            settings.pytriton_url = manager.client_url
+        app.state.embedded_pytriton_manager = manager
+
+        app.state.redis = Redis.from_url(settings.redis_url, decode_responses=False)
+        app.state.mapping_store = RedisMappingStore(app.state.redis)
+        _load_runtime()
+    except Exception:
+        if manager is not None:
+            manager.stop()
+        raise
 
 
 @app.on_event("shutdown")
 async def shutdown() -> None:
-    await app.state.redis.aclose()
+    manager = getattr(app.state, "embedded_pytriton_manager", None)
+    if manager is not None:
+        manager.stop()
+    redis_client = getattr(app.state, "redis", None)
+    if redis_client is not None:
+        await redis_client.aclose()
 
 
 @app.get("/healthz")
@@ -203,6 +250,12 @@ async def readyz() -> dict[str, str]:
         pong = await app.state.redis.ping()
         if not pong:
             raise RuntimeError("redis ping returned false")
+        if settings.runtime_mode == "cuda":
+            manager = getattr(app.state, "embedded_pytriton_manager", None)
+            if manager is None:
+                raise RuntimeError("embedded pytriton manager is not initialized")
+            if not manager.is_ready():
+                raise RuntimeError(manager.last_error() or "embedded pytriton is not ready")
     except Exception as exc:
         raise HTTPException(status_code=503, detail=f"not ready: {exc}") from exc
     return {"status": "ready"}
