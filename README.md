@@ -22,7 +22,6 @@ This service does not route LLM traffic itself. It exposes a unified guardrails 
 - `GET /healthz`
 - `GET /readyz`
 - `GET /openapi.json`
-- `GET /v1/guardrails/openapi.json` (alias)
 - `POST /admin/reload`
 - `GET /v1/guardrails/capabilities`
 - `POST /v1/guardrails/apply`

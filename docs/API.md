@@ -20,10 +20,6 @@ The API is stage-based and transform-aware:
 
 Auto-generated OpenAPI 3.1 JSON spec (FastAPI native endpoint).
 
-### `GET /v1/guardrails/openapi.json`
-
-Alias endpoint returning the same OpenAPI JSON spec under guardrails namespace.
-
 ### `GET /healthz`
 
 Liveness probe.

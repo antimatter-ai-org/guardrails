@@ -7,7 +7,6 @@ def test_openapi_endpoint_is_enabled() -> None:
     assert app.openapi_url == "/openapi.json"
     route_paths = {getattr(route, "path", "") for route in app.routes}
     assert "/openapi.json" in route_paths
-    assert "/v1/guardrails/openapi.json" in route_paths
 
 
 def test_openapi_schema_includes_guardrails_paths() -> None:
