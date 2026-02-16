@@ -41,6 +41,17 @@ class _FakeEmbeddedManager:
         return self.error
 
 
+class _FakePolicyResolver:
+    def __init__(self, config: Any) -> None:
+        self.config = config
+
+    def list_policies(self) -> list[str]:
+        return ["external_default"]
+
+    def resolve_policy(self, policy_name: str | None = None) -> tuple[str, Any]:
+        return ("external_default", object())
+
+
 @pytest.mark.asyncio
 async def test_startup_starts_embedded_pytriton_in_cuda_mode(monkeypatch: pytest.MonkeyPatch) -> None:
     redis_client = _FakeRedis()
@@ -100,3 +111,63 @@ async def test_readyz_passes_without_embedded_pytriton_in_cpu_mode(monkeypatch: 
 
     response: dict[str, Any] = await main.readyz()
     assert response == {"status": "ready"}
+
+
+def test_load_runtime_warms_profiles_in_cpu_mode(monkeypatch: pytest.MonkeyPatch) -> None:
+    class _FakeAnalysisService:
+        def __init__(self, config: Any) -> None:
+            self.config = config
+            self.calls: list[tuple[list[str], float]] = []
+
+        def warm_up_profile_runtimes(self, *, profile_names: list[str], timeout_s: float) -> dict[str, str]:
+            self.calls.append((profile_names, timeout_s))
+            return {}
+
+    fake_config = type(
+        "_Cfg",
+        (),
+        {
+            "analyzer_profiles": {"external_rich": object(), "strict_profile": object()},
+            "recognizer_definitions": {"gliner_pii_multilingual": object()},
+        },
+    )()
+    fake_analysis = _FakeAnalysisService(fake_config)
+
+    monkeypatch.setattr(main.settings, "runtime_mode", "cpu")
+    monkeypatch.setattr(main.settings, "pytriton_init_timeout_s", 21.0)
+    monkeypatch.setattr(main, "load_policy_config", lambda *_args, **_kwargs: fake_config)
+    monkeypatch.setattr(main, "PolicyResolver", _FakePolicyResolver)
+    monkeypatch.setattr(main, "PresidioAnalysisService", lambda _config: fake_analysis)
+    monkeypatch.setattr(main, "GuardrailsService", lambda **_kwargs: object())
+    main.app.state.mapping_store = object()
+
+    main._load_runtime()
+
+    assert fake_analysis.calls == [(["external_rich", "strict_profile"], 21.0)]
+
+
+def test_load_runtime_raises_when_warmup_fails(monkeypatch: pytest.MonkeyPatch) -> None:
+    class _FakeAnalysisService:
+        def __init__(self, config: Any) -> None:
+            self.config = config
+
+        def warm_up_profile_runtimes(self, *, profile_names: list[str], timeout_s: float) -> dict[str, str]:
+            return {"external_rich:gliner": "runtime is not ready"}
+
+    fake_config = type(
+        "_Cfg",
+        (),
+        {
+            "analyzer_profiles": {"external_rich": object()},
+            "recognizer_definitions": {"gliner_pii_multilingual": object()},
+        },
+    )()
+
+    monkeypatch.setattr(main, "load_policy_config", lambda *_args, **_kwargs: fake_config)
+    monkeypatch.setattr(main, "PolicyResolver", _FakePolicyResolver)
+    monkeypatch.setattr(main, "PresidioAnalysisService", lambda _config: _FakeAnalysisService(fake_config))
+    monkeypatch.setattr(main, "GuardrailsService", lambda **_kwargs: object())
+    main.app.state.mapping_store = object()
+
+    with pytest.raises(RuntimeError, match="model runtime warm-up failed"):
+        main._load_runtime()

@@ -57,6 +57,18 @@ _LOCATION_CONTEXT_WORDS = (
     "house",
     "apartment",
 )
+_CANONICAL_OVERLAP_PRIORITY = {
+    "ip": 140,
+    "payment_card": 130,
+    "phone": 125,
+    "email": 120,
+    "secret": 115,
+    "identifier": 100,
+    "date": 95,
+    "person": 90,
+    "organization": 85,
+    "location": 80,
+}
 
 
 @dataclass(slots=True)
@@ -270,15 +282,56 @@ def _normalize_generic(*, text: str, detection: Detection) -> Detection:
 def _resolve_overlaps(detections: list[Detection]) -> tuple[list[Detection], int]:
     if not detections:
         return [], 0
-    sorted_by_priority = sorted(
-        detections,
-        key=lambda item: (-float(item.score), -(item.end - item.start), item.start),
-    )
+
+    def overlaps(left: Detection, right: Detection) -> bool:
+        return not (left.end <= right.start or left.start >= right.end)
+
+    def phone_like(text: str) -> bool:
+        digits = sum(char.isdigit() for char in text)
+        if digits < 10:
+            return False
+        compact = re.sub(r"\s+", "", text)
+        return bool(re.fullmatch(r"(?:\+?\d[\d()\-\s]{8,}\d)", compact) or re.fullmatch(r"\d{10,15}", compact))
+
+    def ip_like(text: str) -> bool:
+        value = text.strip().lower()
+        if not value:
+            return False
+        if "." in value and re.fullmatch(r"(?:\d{1,3}\.){3}\d{1,3}(?:/\d{1,2})?", value):
+            return True
+        return ":" in value and bool(re.fullmatch(r"[0-9a-f:]{2,}", value))
+
+    def priority(item: Detection) -> tuple[int, float, int, int]:
+        metadata = item.metadata or {}
+        canonical = str(metadata.get("canonical_label") or "").lower()
+        entity_type = str(metadata.get("entity_type") or "").upper()
+        detector_name = str(item.detector or "").lower()
+        signal = metadata.get("payment_card_signal", {})
+
+        base = int(_CANONICAL_OVERLAP_PRIORITY.get(canonical, 70))
+        if canonical == "phone":
+            if entity_type in {"PHONE", "PHONE_NUMBER"} or "phone" in detector_name or phone_like(item.text):
+                base += 18
+            else:
+                base -= 10
+        if canonical == "identifier" and phone_like(item.text):
+            base -= 22
+        if canonical == "ip" and ip_like(item.text):
+            base += 16
+        if canonical == "payment_card" and isinstance(signal, dict):
+            if bool(signal.get("luhn_valid")):
+                base += 12
+            elif bool(signal.get("grouped_like_card")) or bool(signal.get("has_context")):
+                base += 6
+
+        return (base, float(item.score), int(item.end - item.start), -int(item.start))
+
+    sorted_by_priority = sorted(detections, key=priority, reverse=True)
     selected: list[Detection] = []
     for candidate in sorted_by_priority:
         if candidate.end <= candidate.start:
             continue
-        if any(not (candidate.end <= item.start or candidate.start >= item.end) for item in selected):
+        if any(overlaps(candidate, item) for item in selected):
             continue
         selected.append(candidate)
     selected_sorted = sorted(selected, key=lambda item: item.start)

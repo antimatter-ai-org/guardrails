@@ -13,6 +13,7 @@ def test_external_default_profile_includes_extended_regex_layers() -> None:
     assert "identifier_regex" in recognizers
     assert "network_pii_regex" in recognizers
     assert "date_pii_regex" in recognizers
+    assert "natasha_ner_ru" in recognizers
 
 
 def test_network_and_date_recognizers_have_expected_labels() -> None:

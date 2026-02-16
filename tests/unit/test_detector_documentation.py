@@ -32,5 +32,7 @@ def test_gliner_is_enabled_in_default_profile() -> None:
     recognizers = policy["analyzer_profiles"][profile_name]["analysis"]["recognizers"]
     assert "gliner_pii_multilingual" in recognizers
     assert policy["recognizer_definitions"]["gliner_pii_multilingual"]["enabled"] is True
+    assert "natasha_ner_ru" in recognizers
+    assert policy["recognizer_definitions"]["natasha_ner_ru"]["enabled"] is True
     assert "nemotron_pii_token_classifier" in recognizers
     assert policy["recognizer_definitions"]["nemotron_pii_token_classifier"]["enabled"] is True

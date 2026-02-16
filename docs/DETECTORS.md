@@ -188,6 +188,32 @@ Examples:
 - `Контакт: ivan@example.com` -> `EMAIL_ADDRESS`
 - `Телефон +7 999 123 45 67` -> `PHONE_NUMBER`
 
+## Recognizer: `natasha_ner_ru`
+
+Type: `natasha_ner`
+
+Source:
+- Natasha NER stack (`Segmenter`, `NewsEmbedding`, `NewsNERTagger`).
+
+Raw model labels:
+- `PER`
+- `ORG`
+- `LOC`
+
+Configured mapping to normalized entities:
+- `PERSON`
+- `ORGANIZATION`
+- `LOCATION`
+
+Policy notes:
+- Recognizer is enabled in `external_rich`.
+- Imperative prompt verbs at sentence start are filtered for `PER` (for example, `Перескажи` false positives).
+
+Examples:
+- `Ваня Миллипиздриков встретил Григория Стрельникова` -> `PERSON`
+- `Компания Ромашка` -> `ORGANIZATION`
+- `Москва` -> `LOCATION`
+
 ## Recognizer: `nemotron_pii_token_classifier`
 
 Type: `token_classifier`
@@ -206,6 +232,12 @@ Raw model labels (BIO collapsed to entity group):
 - `ip`
 - `military_individual_number`
 - `mobile_phone`
+- `name`
+- `first_name`
+- `last_name`
+- `middle_name`
+- `name_initials`
+- `nickname`
 - `snils`
 - `tin`
 - `vehicle_number`
@@ -217,11 +249,12 @@ Configured mapping to normalized entities:
 - `EMAIL_ADDRESS`
 - `IP_ADDRESS`
 - `PHONE_NUMBER`
+- `PERSON`
 - `TIN`
 
 Policy notes:
 - Recognizer is loaded only when `GR_ENABLE_NEMOTRON=true` (default is disabled).
-- Nemotron is configured with a structured-label allowlist (name/org labels are intentionally excluded).
+- Nemotron uses a structured-label allowlist including person-name labels (`name`, `first_name`, `last_name`, `middle_name`, `name_initials`, `nickname`).
 - Per-entity minimum confidence thresholds are applied in recognizer postprocessing (`entity_thresholds` / `raw_label_thresholds`).
 
 Examples:

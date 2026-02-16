@@ -10,7 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 class RecognizerDefinition(BaseModel):
     model_config = ConfigDict(extra="allow")
 
-    type: Literal["regex", "secret_regex", "phone", "ip", "gliner", "token_classifier", "entropy"]
+    type: Literal["regex", "secret_regex", "phone", "ip", "gliner", "token_classifier", "entropy", "natasha_ner"]
     enabled: bool = True
     params: dict[str, Any] = Field(default_factory=dict)
 

@@ -258,13 +258,12 @@ def _load_runtime() -> None:
         analysis_service=analysis_service,
         mapping_store=app.state.mapping_store,
     )
-    if settings.runtime_mode == "cuda":
-        warmup_errors = analysis_service.warm_up_profile_runtimes(
-            profile_names=sorted(config.analyzer_profiles.keys()),
-            timeout_s=settings.pytriton_init_timeout_s,
-        )
-        if warmup_errors:
-            raise RuntimeError(f"model runtime warm-up failed: {warmup_errors}")
+    warmup_errors = analysis_service.warm_up_profile_runtimes(
+        profile_names=sorted(config.analyzer_profiles.keys()),
+        timeout_s=settings.pytriton_init_timeout_s,
+    )
+    if warmup_errors:
+        raise RuntimeError(f"model runtime warm-up failed: {warmup_errors}")
     logger.info(
         "policy loaded from %s, profiles=%s, recognizers=%s",
         settings.policy_path,

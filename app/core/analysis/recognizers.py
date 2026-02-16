@@ -19,6 +19,19 @@ _FLAG_MAP: dict[str, int] = {
     "UNICODE": re.UNICODE,
 }
 _PRESIDIO_COMPAT_LANGUAGE = "global"
+_NATASHA_PROMPT_IMPERATIVE_WORDS = {
+    "перескажи",
+    "расскажи",
+    "напиши",
+    "составь",
+    "придумай",
+    "объясни",
+    "переведи",
+    "отредактируй",
+    "сократи",
+    "продолжи",
+    "перефразируй",
+}
 
 
 def _normalize_entity_type(label: str) -> str:
@@ -362,6 +375,120 @@ class TokenClassifierPresidioRecognizer(EntityRecognizer):
         return results
 
 
+class NatashaNerRecognizer(EntityRecognizer):
+    def __init__(
+        self,
+        *,
+        name: str,
+        supported_language: str,
+        score: float,
+        drop_prompt_imperatives: bool = True,
+        min_person_chars: int = 3,
+    ) -> None:
+        self._score = float(score)
+        self._drop_prompt_imperatives = bool(drop_prompt_imperatives)
+        self._min_person_chars = max(2, int(min_person_chars))
+        self._load_error: str | None = None
+        self._segmenter: Any | None = None
+        self._tagger: Any | None = None
+        self._doc_cls: Any | None = None
+        super().__init__(
+            supported_entities=["PERSON", "ORGANIZATION", "LOCATION"],
+            name=name,
+            supported_language=supported_language,
+        )
+
+    def load(self) -> None:
+        if self._segmenter is not None and self._tagger is not None and self._doc_cls is not None:
+            return
+        try:
+            from natasha import Doc, NewsEmbedding, NewsNERTagger, Segmenter
+        except Exception as exc:
+            self._load_error = f"natasha import error: {exc}"
+            return
+        try:
+            self._segmenter = Segmenter()
+            embedding = NewsEmbedding()
+            self._tagger = NewsNERTagger(embedding)
+            self._doc_cls = Doc
+            self._load_error = None
+        except Exception as exc:
+            self._load_error = f"natasha runtime init error: {exc}"
+            self._segmenter = None
+            self._tagger = None
+            self._doc_cls = None
+
+    @staticmethod
+    def _is_sentence_start(text: str, start: int) -> bool:
+        cursor = max(0, int(start)) - 1
+        while cursor >= 0 and text[cursor].isspace():
+            cursor -= 1
+        if cursor < 0:
+            return True
+        return text[cursor] in ".!?\n\r:;"
+
+    def _drop_prompt_person_false_positive(self, *, text: str, start: int, end: int) -> bool:
+        segment = text[start:end].strip()
+        if not segment:
+            return True
+        words = re.findall(r"\p{L}+", segment)
+        if not words:
+            return True
+        compact_len = sum(len(word) for word in words)
+        if compact_len < self._min_person_chars:
+            return True
+        if len(words) != 1 or not self._drop_prompt_imperatives:
+            return False
+        if not self._is_sentence_start(text, start):
+            return False
+        return words[0].lower() in _NATASHA_PROMPT_IMPERATIVE_WORDS
+
+    def analyze(self, text: str, entities: list[str], nlp_artifacts: Any = None) -> list[RecognizerResult]:
+        if entities and not set(entities).intersection({"PERSON", "ORGANIZATION", "LOCATION"}):
+            return []
+        if self._segmenter is None or self._tagger is None or self._doc_cls is None:
+            self.load()
+        if self._segmenter is None or self._tagger is None or self._doc_cls is None:
+            return []
+
+        results: list[RecognizerResult] = []
+        mapping = {"PER": "PERSON", "ORG": "ORGANIZATION", "LOC": "LOCATION"}
+
+        try:
+            doc = self._doc_cls(text)
+            doc.segment(self._segmenter)
+            doc.tag_ner(self._tagger)
+            spans = list(getattr(doc, "spans", []) or [])
+        except Exception:
+            return []
+
+        for span in spans:
+            entity_type = mapping.get(str(getattr(span, "type", "")).upper())
+            if entity_type is None:
+                continue
+            if entities and entity_type not in entities:
+                continue
+            start = int(getattr(span, "start", -1))
+            end = int(getattr(span, "stop", -1))
+            if end <= start:
+                continue
+            if entity_type == "PERSON" and self._drop_prompt_person_false_positive(text=text, start=start, end=end):
+                continue
+            results.append(
+                RecognizerResult(
+                    entity_type=entity_type,
+                    start=start,
+                    end=end,
+                    score=self._score,
+                    recognition_metadata={
+                        RecognizerResult.RECOGNIZER_NAME_KEY: self.name,
+                        RecognizerResult.RECOGNIZER_IDENTIFIER_KEY: self.id,
+                    },
+                )
+            )
+        return results
+
+
 class EntropySecretRecognizer(EntityRecognizer):
     def __init__(
         self,
@@ -571,6 +698,25 @@ def _build_token_classifier_recognizers(
     ]
 
 
+def _build_natasha_recognizers(
+    recognizer_id: str,
+    definition: RecognizerDefinition,
+) -> list[EntityRecognizer]:
+    params = definition.params
+    score = float(params.get("score", 0.88))
+    drop_prompt_imperatives = bool(params.get("drop_prompt_imperatives", True))
+    min_person_chars = int(params.get("min_person_chars", 3))
+    return [
+        NatashaNerRecognizer(
+            name=recognizer_id,
+            supported_language=_PRESIDIO_COMPAT_LANGUAGE,
+            score=score,
+            drop_prompt_imperatives=drop_prompt_imperatives,
+            min_person_chars=min_person_chars,
+        )
+    ]
+
+
 def _build_recognizers_for_definition(
     recognizer_id: str,
     definition: RecognizerDefinition,
@@ -586,6 +732,8 @@ def _build_recognizers_for_definition(
         return _build_gliner_recognizers(recognizer_id, definition)
     if rec_type == "token_classifier":
         return _build_token_classifier_recognizers(recognizer_id, definition)
+    if rec_type == "natasha_ner":
+        return _build_natasha_recognizers(recognizer_id, definition)
     if rec_type == "entropy":
         params = definition.params
         return [

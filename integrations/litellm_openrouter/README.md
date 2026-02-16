@@ -8,6 +8,7 @@ This integration example demonstrates router-mediated PII masking/unmasking with
 - OpenRouter upstream model
 
 Guardrails in this demo has Nemotron enabled (`GR_ENABLE_NEMOTRON=true`) in addition to the default detector stack.
+Because Guardrails performs startup warm-up for model-backed recognizers, initial `guardrails` container boot may take longer than before.
 
 The router exposes a standard OpenAI-compatible endpoint:
 

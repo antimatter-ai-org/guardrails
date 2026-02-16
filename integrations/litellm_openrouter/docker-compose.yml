@@ -15,6 +15,7 @@ services:
       GR_REDIS_URL: redis://redis:6379/0
       GR_RUNTIME_MODE: cpu
       GR_ENABLE_NEMOTRON: "true"
+      GR_PYTRITON_INIT_TIMEOUT_S: "240"
       GR_LOG_LEVEL: DEBUG
     depends_on:
       redis:
