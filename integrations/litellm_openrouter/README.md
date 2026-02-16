@@ -7,6 +7,8 @@ This integration example demonstrates router-mediated PII masking/unmasking with
 - Open WebUI (pre-configured to use LiteLLM)
 - OpenRouter upstream model
 
+Guardrails in this demo has Nemotron enabled (`GR_ENABLE_NEMOTRON=true`) in addition to the default detector stack.
+
 The router exposes a standard OpenAI-compatible endpoint:
 
 - `POST /v1/chat/completions`
