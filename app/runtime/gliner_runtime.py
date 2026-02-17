@@ -228,12 +228,15 @@ class PyTritonGlinerRuntime(GlinerRuntime):
         hf_model_name: str,
         pytriton_url: str,
         init_timeout_s: float,
-        infer_timeout_s: float,
+        infer_timeout_s: float | None,
     ) -> None:
         self._model_name = triton_model_name
         self._hf_model_name = hf_model_name
         self._pytriton_url = pytriton_url
-        self._init_timeout_s = max(float(init_timeout_s), float(infer_timeout_s))
+        # init timeout should dominate only if infer timeout is set.
+        self._init_timeout_s = float(init_timeout_s)
+        if infer_timeout_s is not None:
+            self._init_timeout_s = max(self._init_timeout_s, float(infer_timeout_s))
         self._infer_timeout_s = infer_timeout_s
         self._max_batch_size_hint = 32
         self.device = "cuda"
@@ -415,7 +418,7 @@ def build_gliner_runtime(
     pytriton_url: str,
     pytriton_model_name: str,
     pytriton_init_timeout_s: float,
-    pytriton_infer_timeout_s: float,
+    pytriton_infer_timeout_s: float | None,
 ) -> GlinerRuntime:
     mode = runtime_mode.strip().lower()
 
