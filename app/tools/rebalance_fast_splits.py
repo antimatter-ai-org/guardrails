@@ -294,6 +294,35 @@ def main() -> int:
                 CommitOperationAdd(path_in_repo="data/fast-00000-of-00001.parquet", path_or_fileobj=str(parquet_path)),
             ]
 
+            # Publish dataset_info.json with updated split sizes so `datasets.load_dataset(...)`
+            # doesn't fail split verification on machines with cached/stale expected sizes.
+            try:
+                builder = datasets.load_dataset_builder(plan.hf_id, token=True, cache_dir=cache_dir)
+                info = builder.info
+                # Keep the existing split metadata but update fast num_examples to the new split size.
+                from datasets.splits import SplitInfo  # type: ignore
+
+                if "fast" in info.splits:
+                    orig = info.splits["fast"]
+                    info.splits["fast"] = SplitInfo(
+                        name="fast",
+                        num_bytes=int(getattr(orig, "num_bytes", 0) or 0),
+                        num_examples=int(len(ds_fast)),
+                        shard_lengths=getattr(orig, "shard_lengths", None),
+                        original_shard_lengths=getattr(orig, "original_shard_lengths", None),
+                        dataset_name=getattr(orig, "dataset_name", None),
+                    )
+                info_dir = td_path / "_dataset_info"
+                info_dir.mkdir(parents=True, exist_ok=True)
+                info.write_to_directory(str(info_dir))
+                info_path = info_dir / "dataset_info.json"
+                if info_path.exists():
+                    ops.append(CommitOperationAdd(path_in_repo="dataset_info.json", path_or_fileobj=str(info_path)))
+            except Exception:
+                # Best effort: fast parquet is still updated; dataset-info mismatch can be resolved by
+                # clearing local caches. Prefer not to fail the entire publish step.
+                pass
+
             for stats_path in stats_paths:
                 local_stats = hf_hub_download(repo_id=plan.hf_id, repo_type="dataset", filename=stats_path)
                 payload = json.loads(Path(local_stats).read_text(encoding="utf-8"))
