@@ -31,6 +31,17 @@ uv run --extra eval python -m app.eval_v3.cli \
   --output-dir reports/evaluations
 ```
 
+## HF-Stored “fast” Splits
+
+The suite’s `fast` splits are stored directly in HuggingFace dataset repos for consistency across machines (local/remote, online/offline).
+They are designed to fit within an approximate ~10 minute total GPU budget for the whole suite (including task overhead), while staying label-diverse.
+
+To regenerate and publish rebalanced `fast` splits from `full` (deterministic, seeded):
+
+```bash
+uv run --extra eval python -m app.tools.rebalance_fast_splits --push --no-dry-run
+```
+
 Run on `full`:
 
 ```bash
@@ -147,4 +158,3 @@ uv run --extra eval python -m app.eval_v3.compare \
 ## Legacy Evaluator
 
 The previous evaluator remains at `app/eval/run.py` for now, but `make eval-all` uses v3 by default.
-
