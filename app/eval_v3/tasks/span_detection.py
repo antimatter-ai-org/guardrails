@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import time
 from collections import defaultdict
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 import sys
 from typing import Any
 
@@ -199,8 +199,8 @@ def run_span_detection(
                 "scored_labels": sorted(item.scored_labels),
                 "metrics": payload,
                 "macro_over_labels": {
-                    "char": macro_over_labels(agg.per_label_char).__dict__,
-                    "exact": macro_over_labels(agg.per_label_exact).__dict__,
+                    "char": asdict(macro_over_labels(agg.per_label_char)),
+                    "exact": asdict(macro_over_labels(agg.per_label_exact)),
                 },
                 "dataset_slices": {
                     "language": _slice_metrics(samples=view.samples, predictions_by_id=view.predictions_by_id, key="language"),
@@ -249,8 +249,8 @@ def run_span_detection(
             "datasets": dataset_reports,
         },
         "macro_over_labels": {
-            "char": macro_char.__dict__,
-            "exact": macro_exact.__dict__,
+            "char": asdict(macro_char),
+            "exact": asdict(macro_exact),
         },
         "dataset_slices": {
             "language": _slice_metrics(samples=combined_samples, predictions_by_id=combined_predictions, key="language"),
