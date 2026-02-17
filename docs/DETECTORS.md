@@ -258,3 +258,29 @@ Examples:
 - `Проживает: г. Казань, ул. Пушкина 12` -> `LOCATION`
 - `Почта: ivan.petrov@corp.local` -> `EMAIL_ADDRESS`
 - `ИНН 7707083893` -> `TIN`
+
+## Recognizer: `nemotron_pii_token_classifier_extended`
+
+Type: `token_classifier`
+
+Source:
+- Same runtime + model as `nemotron_pii_token_classifier` (`scanpatch/pii-ner-nemotron`).
+
+Raw model labels (BIO collapsed to entity group):
+- All labels from `nemotron_pii_token_classifier`, plus:
+- `first_name`, `last_name`, `middle_name`, `name`, `name_initials`, `nickname`
+- `organization`
+
+Configured mapping to normalized entities:
+- `PERSON`
+- `ORGANIZATION`
+- plus the same structured PII mappings as `nemotron_pii_token_classifier` (for example `LOCATION`, `EMAIL_ADDRESS`, `PHONE_NUMBER`, etc).
+
+Policy notes:
+- Intended for experiments where Nemotron is used as a partial replacement for GLiNER NER coverage (person/org).
+- Recognizer is loaded only when `GR_ENABLE_NEMOTRON=true`.
+- For end-to-end GLiNER disable experiments, set `GR_ENABLE_GLINER=false`.
+
+Examples:
+- `Иван Петров` -> `PERSON`
+- `ООО Ромашка` -> `ORGANIZATION`

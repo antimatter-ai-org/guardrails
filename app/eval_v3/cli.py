@@ -191,11 +191,14 @@ def _env(name: str, default: str) -> str:
 def _maybe_start_embedded_pytriton() -> Any | None:
     if settings.runtime_mode != "cuda":
         return None
+    if not bool(settings.enable_gliner) and not bool(settings.enable_nemotron):
+        return None
     from app.runtime.pytriton_embedded import EmbeddedPyTritonConfig, EmbeddedPyTritonManager
 
     manager = EmbeddedPyTritonManager(
         EmbeddedPyTritonConfig(
             pytriton_url=settings.pytriton_url,
+            enable_gliner=settings.enable_gliner,
             gliner_model_ref=_env("GR_PYTRITON_GLINER_MODEL_REF", "urchade/gliner_multi-v2.1"),
             token_model_ref=_env("GR_PYTRITON_TOKEN_MODEL_REF", "scanpatch/pii-ner-nemotron"),
             model_dir=settings.model_dir,
@@ -352,6 +355,7 @@ def main() -> int:
                 "cpu_device": os.getenv("GR_CPU_DEVICE", "auto"),
             },
             "settings": {
+                "enable_gliner": bool(settings.enable_gliner),
                 "enable_nemotron": bool(settings.enable_nemotron),
                 "pytriton_url": str(settings.pytriton_url),
             },
@@ -360,6 +364,7 @@ def main() -> int:
                 # hostnames/connection strings into committed baselines/docs.
                 "GR_RUNTIME_MODE": os.getenv("GR_RUNTIME_MODE"),
                 "GR_CPU_DEVICE": os.getenv("GR_CPU_DEVICE"),
+                "GR_ENABLE_GLINER": os.getenv("GR_ENABLE_GLINER"),
                 "GR_ENABLE_NEMOTRON": os.getenv("GR_ENABLE_NEMOTRON"),
                 "CUDA_VISIBLE_DEVICES": os.getenv("CUDA_VISIBLE_DEVICES"),
             },

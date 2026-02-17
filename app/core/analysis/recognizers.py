@@ -629,6 +629,9 @@ def _build_gliner_recognizers(
     recognizer_id: str,
     definition: RecognizerDefinition,
 ) -> list[EntityRecognizer]:
+    if not settings.enable_gliner:
+        return []
+
     params = definition.params
     labels = [str(item) for item in params.get("labels", [])]
     if not labels:

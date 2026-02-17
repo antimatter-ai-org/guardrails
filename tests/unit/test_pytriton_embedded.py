@@ -48,6 +48,7 @@ def _install_fake_pytriton(monkeypatch: pytest.MonkeyPatch, triton_cls: type[_Fa
 def _manager_config(url: str = "127.0.0.1:8000") -> EmbeddedPyTritonConfig:
     return EmbeddedPyTritonConfig(
         pytriton_url=url,
+        enable_gliner=True,
         gliner_model_ref="gliner-model",
         token_model_ref="token-model",
         model_dir="/models",
@@ -147,3 +148,22 @@ def test_embedded_pytriton_manager_rejects_non_loopback_url(monkeypatch: pytest.
 
     assert manager.is_ready() is False
     assert manager.last_error() is not None
+
+
+def test_embedded_pytriton_manager_skips_triton_when_no_models_enabled(monkeypatch: pytest.MonkeyPatch) -> None:
+    # This path must not import/require pytriton at all.
+    cfg = EmbeddedPyTritonConfig(
+        pytriton_url="localhost:9010",
+        enable_gliner=False,
+        gliner_model_ref="gliner-model",
+        token_model_ref="token-model",
+        model_dir="/models",
+        offline_mode=True,
+        device="cuda",
+        max_batch_size=16,
+        enable_nemotron=False,
+    )
+    manager = EmbeddedPyTritonManager(cfg)
+    manager.start()
+    assert manager.is_ready() is True
+    assert manager.last_error() is None

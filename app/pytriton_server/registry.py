@@ -10,16 +10,19 @@ def build_bindings(
     token_classifier_model_ref: str,
     device: str,
     max_batch_size: int,
+    enable_gliner: bool = True,
     enable_nemotron: bool = False,
 ) -> list[TritonModelBinding]:
-    models = [
-        GlinerTritonModel(
-            triton_model_name="gliner",
-            gliner_hf_model_name=gliner_model_ref,
-            device=device,
-            max_batch_size=max_batch_size,
+    models: list[object] = []
+    if enable_gliner:
+        models.append(
+            GlinerTritonModel(
+                triton_model_name="gliner",
+                gliner_hf_model_name=gliner_model_ref,
+                device=device,
+                max_batch_size=max_batch_size,
+            )
         )
-    ]
     if enable_nemotron:
         models.append(
             TokenClassifierTritonModel(

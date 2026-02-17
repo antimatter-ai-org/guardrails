@@ -262,6 +262,7 @@ def _build_embedded_pytriton_manager() -> EmbeddedPyTritonManager:
     return EmbeddedPyTritonManager(
         EmbeddedPyTritonConfig(
             pytriton_url=settings.pytriton_url,
+            enable_gliner=settings.enable_gliner,
             gliner_model_ref=_env("GR_PYTRITON_GLINER_MODEL_REF", "urchade/gliner_multi-v2.1"),
             token_model_ref=_env("GR_PYTRITON_TOKEN_MODEL_REF", "scanpatch/pii-ner-nemotron"),
             model_dir=settings.model_dir,
@@ -301,6 +302,19 @@ async def _initialize_models_in_background() -> None:
     try:
         app.state.models_load_error = None
         if settings.runtime_mode == "cuda":
+            if not bool(settings.enable_gliner) and not bool(settings.enable_nemotron):
+                # No ML models enabled: skip Triton entirely.
+                _load_runtime()
+                config = app.state.policy_resolver.config
+                readiness_errors = app.state.analysis_service.ensure_profile_runtimes_ready(
+                    profile_names=sorted(config.analyzer_profiles.keys()),
+                    timeout_s=None,
+                )
+                if readiness_errors:
+                    raise RuntimeError(f"model runtime readiness check failed: {readiness_errors}")
+                app.state.models_ready = True
+                app.state.models_load_error = None
+                return
             manager = getattr(app.state, "embedded_pytriton_manager", None)
             if manager is None:
                 manager = _build_embedded_pytriton_manager()
