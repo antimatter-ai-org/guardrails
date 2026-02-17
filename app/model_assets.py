@@ -20,9 +20,11 @@ def apply_model_env(model_dir: str | None, offline_mode: bool) -> None:
             except OSError:
                 pass
         if hf_cache.exists():
-            os.environ["HF_HOME"] = str(hf_cache)
-            os.environ["HUGGINGFACE_HUB_CACHE"] = str(hf_cache / "hub")
-            os.environ["TRANSFORMERS_CACHE"] = str(hf_cache / "transformers")
+            # Respect explicit environment configuration (e.g. separate dataset/model caches
+            # on remote hosts). Model code can still load from GR_MODEL_DIR via local paths.
+            os.environ.setdefault("HF_HOME", str(hf_cache))
+            os.environ.setdefault("HUGGINGFACE_HUB_CACHE", str(hf_cache / "hub"))
+            os.environ.setdefault("TRANSFORMERS_CACHE", str(hf_cache / "transformers"))
 
     if offline_mode:
         os.environ["HF_HUB_OFFLINE"] = "1"

@@ -1,0 +1,112 @@
+version: 1
+
+# Eval suite + dataset registry for app.eval_v3.
+#
+# Design goals:
+# - Make dataset selection/configuration data-driven (no code changes to add datasets).
+# - Encode per-dataset label supervision so missing labels do not skew scores.
+#
+# Canonical labels (v1): person, email, phone, location, date, identifier, payment_card, ip, url, secret, organization
+
+suites:
+  guardrails_ru:
+    title: Guardrails RU
+    default_split: fast
+    datasets:
+      - antimatter-ai/guardrails-ru-russian-pii-66k-mvp-v1
+      - antimatter-ai/guardrails-ru-meddies-pii-cleaned-v1
+      - antimatter-ai/guardrails-ru-scanpatch-pii-ner-controlled-v1
+      - antimatter-ai/guardrails-ru-rubai-ner-150k-personal-ru-v1
+      - antimatter-ai/guardrails-ru-kaggle-pii-data-detection-sample-v1
+      - antimatter-ai/guardrails-ru-hf-pii-sample-en-v1
+      - antimatter-ai/guardrails-ru-presidio-test-dataset-v1
+
+datasets:
+  antimatter-ai/guardrails-ru-russian-pii-66k-mvp-v1:
+    hf_id: antimatter-ai/guardrails-ru-russian-pii-66k-mvp-v1
+    kind: hf_span_v1
+    text_field: source_text
+    spans_field: privacy_mask
+    scored_labels: [person, email, phone, identifier, payment_card, date, secret]
+    label_map:
+      GIVENNAME: person
+      SURNAME: person
+      EMAIL: email
+      TELEPHONENUM: phone
+      DATEOFBIRTH: date
+      CREDITCARDNUMBER: payment_card
+      PASSWORD: secret
+      USERNAME: identifier
+      ACCOUNTNUM: identifier
+      IDCARDNUM: identifier
+      SOCIALNUM: identifier
+      TAXNUM: identifier
+      DRIVERLICENSENUM: identifier
+    slice_fields: [language, locale, source_dataset]
+
+  antimatter-ai/guardrails-ru-meddies-pii-cleaned-v1:
+    hf_id: antimatter-ai/guardrails-ru-meddies-pii-cleaned-v1
+    kind: hf_span_v1
+    text_field: source_text
+    spans_field: privacy_mask
+    scored_labels: [person, email, phone, location, date, identifier, organization]
+    label_map:
+      HUMAN_NAME: person
+      EMAIL: email
+      PHONE_NUMBER: phone
+      ADDRESS: location
+      DATE: date
+      ID_NUMBER: identifier
+      COMPANY_NAME: organization
+    slice_fields: [language, document_type, document_length, text_format, source_subset]
+
+  antimatter-ai/guardrails-ru-scanpatch-pii-ner-controlled-v1:
+    hf_id: antimatter-ai/guardrails-ru-scanpatch-pii-ner-controlled-v1
+    kind: hf_span_v1
+    text_field: source_text
+    spans_field: privacy_mask
+    scored_labels: [person, organization, location, phone, email, ip, date, identifier]
+    # Derived dataset already emits canonical labels.
+    label_map: {}
+    slice_fields: [language, script_profile, lang_bucket, source_split, source, noisy, entity_count]
+
+  antimatter-ai/guardrails-ru-rubai-ner-150k-personal-ru-v1:
+    hf_id: antimatter-ai/guardrails-ru-rubai-ner-150k-personal-ru-v1
+    kind: hf_span_v1
+    text_field: source_text
+    spans_field: privacy_mask
+    scored_labels: [person, phone, date, identifier, location, payment_card]
+    # Derived dataset already emits canonical labels.
+    label_map: {}
+    slice_fields: [language, script_profile, source_domain, alignment_mode, entity_count]
+
+  antimatter-ai/guardrails-ru-kaggle-pii-data-detection-sample-v1:
+    hf_id: antimatter-ai/guardrails-ru-kaggle-pii-data-detection-sample-v1
+    kind: hf_span_v1
+    text_field: source_text
+    spans_field: privacy_mask
+    scored_labels: [person, location, email, phone, identifier, url]
+    # Derived dataset already emits canonical labels.
+    label_map: {}
+    slice_fields: [language, script_profile, entity_count, source_document, source_prompt_id]
+
+  antimatter-ai/guardrails-ru-hf-pii-sample-en-v1:
+    hf_id: antimatter-ai/guardrails-ru-hf-pii-sample-en-v1
+    kind: hf_span_v1
+    text_field: source_text
+    spans_field: privacy_mask
+    scored_labels: [person, email, phone, location, date, identifier, payment_card, ip, secret]
+    # Derived dataset already emits canonical labels.
+    label_map: {}
+    slice_fields: [language, script_profile, source_locale, entity_count]
+
+  antimatter-ai/guardrails-ru-presidio-test-dataset-v1:
+    hf_id: antimatter-ai/guardrails-ru-presidio-test-dataset-v1
+    kind: hf_span_v1
+    text_field: source_text
+    spans_field: privacy_mask
+    scored_labels: [person, email, phone, location, date, payment_card, ip, url]
+    # Derived dataset already emits canonical labels.
+    label_map: {}
+    slice_fields: [language, script_profile, entity_count]
+

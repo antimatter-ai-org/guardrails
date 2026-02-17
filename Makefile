@@ -1,6 +1,7 @@
-.PHONY: sync deps-up deps-down dev-up dev-down run-api run-pytriton run-pytriton-debug test-unit test-integration test-all download-models check-models eval-all eval-scanpatch
+.PHONY: sync deps-up deps-down dev-up dev-down run-api run-pytriton run-pytriton-debug test-unit test-integration test-all download-models download-datasets check-models eval-all eval-scanpatch
 
 MODELS_DIR ?= ./.models
+DATASETS_DIR ?= ./.datasets
 POLICY_PATH ?= ./configs/policy.yaml
 EVAL_ENV_FILE ?= ./.env.eval
 EVAL_OUTPUT_DIR ?= ./reports/evaluations
@@ -10,6 +11,9 @@ sync:
 
 download-models:
 	uv run --extra eval python -m app.tools.download_models --output-dir $(MODELS_DIR) --policy-path $(POLICY_PATH)
+
+download-datasets:
+	uv run --extra eval python -m app.tools.download_datasets --output-dir $(DATASETS_DIR) --registry-path configs/eval/suites.yaml --suite guardrails_ru --splits fast,full
 
 check-models:
 	@test -f "$(MODELS_DIR)/manifest.json" || (echo "Model bundle not found at $(MODELS_DIR). Run: make download-models MODELS_DIR=$(MODELS_DIR)" && exit 1)
@@ -45,7 +49,7 @@ test-integration: deps-up
 test-all: test-unit test-integration
 
 eval-all:
-	uv run --extra eval python -m app.eval.run --split test --policy-path $(POLICY_PATH) --policy-name external_default --env-file $(EVAL_ENV_FILE) --output-dir $(EVAL_OUTPUT_DIR)
+	uv run --extra eval python -m app.eval_v3.cli --suite guardrails_ru --split fast --policy-path $(POLICY_PATH) --policy-name external_default --env-file $(EVAL_ENV_FILE) --output-dir $(EVAL_OUTPUT_DIR)
 
 eval-scanpatch:
 	uv run --extra eval python -m app.eval.run --dataset scanpatch/pii-ner-corpus-synthetic-controlled --split test --policy-path $(POLICY_PATH) --policy-name external_default --env-file $(EVAL_ENV_FILE) --output-dir $(EVAL_OUTPUT_DIR)
