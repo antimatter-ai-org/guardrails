@@ -371,7 +371,7 @@ recognizer_definitions:
         tin: TIN
         vehicle_number: DOCUMENT_NUMBER
       entity_thresholds:
-        LOCATION: 0.82
+        LOCATION: 0.78
         DATE_TIME: 0.78
         DOCUMENT_NUMBER: 0.80
         EMAIL_ADDRESS: 0.72
@@ -447,7 +447,7 @@ recognizer_definitions:
         nickname: PERSON
         organization: ORGANIZATION
       entity_thresholds:
-        LOCATION: 0.82
+        LOCATION: 0.78
         DATE_TIME: 0.78
         DOCUMENT_NUMBER: 0.80
         EMAIL_ADDRESS: 0.72
