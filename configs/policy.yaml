@@ -455,7 +455,7 @@ recognizer_definitions:
         PHONE_NUMBER: 0.78
         TIN: 0.88
         PERSON: 0.65
-        ORGANIZATION: 0.65
+        ORGANIZATION: 0.55
       raw_label_thresholds:
         address_geolocation: 0.90
         address: 0.84
