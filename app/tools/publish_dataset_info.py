@@ -82,11 +82,20 @@ def main() -> int:
             if not info_path.exists():
                 raise RuntimeError(f"failed to write dataset_info.json for {cfg.hf_id}")
 
+            # datasets expects dataset_infos.json (plural) on the Hub for split size verification.
+            # It is a mapping: {config_name: dataset_info_dict}.
+            infos_path = out_dir / "dataset_infos.json"
+            payload = {str(info.config_name): __import__("json").loads(info_path.read_text(encoding="utf-8"))}
+            infos_path.write_text(__import__("json").dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
             if not bool(args.push) or bool(args.dry_run):
                 print("dry_run: skipping push")
                 continue
 
-            ops: list[Any] = [CommitOperationAdd(path_in_repo="dataset_info.json", path_or_fileobj=str(info_path))]
+            ops: list[Any] = [
+                CommitOperationAdd(path_in_repo="dataset_info.json", path_or_fileobj=str(info_path)),
+                CommitOperationAdd(path_in_repo="dataset_infos.json", path_or_fileobj=str(infos_path)),
+            ]
             api.create_commit(
                 repo_id=cfg.hf_id,
                 repo_type="dataset",
@@ -100,4 +109,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-
