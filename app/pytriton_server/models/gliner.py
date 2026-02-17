@@ -1,15 +1,19 @@
 from __future__ import annotations
 
 import json
+import re
+import warnings
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 
 from app.pytriton_server.models.base import TritonModelBinding
-from app.runtime.tokenizer_chunking import (
-    chunk_text,
-    deterministic_overlap_tokens,
+from app.runtime.gliner_word_chunking import (
+    build_prompt_tokens_for_length_check,
+    chunk_text_by_gliner_words,
+    deterministic_overlap_words,
+    gliner_prompt_len_words,
 )
 from app.runtime.torch_runtime import resolve_torch_device
 
@@ -27,8 +31,11 @@ class GlinerTritonModel:
         self._device = resolve_torch_device(device)
         self._max_batch_size = max_batch_size
         self._encoder_tokenizer: Any | None = None
-        self._max_input_tokens: int | None = None
-        self._overlap_tokens: int | None = None
+        self._encoder_max_len: int | None = None
+        self._max_len_words: int | None = None
+        self._max_width: int = 10
+        self._ent_token: str = "<ENT>"
+        self._sep_token: str = "<SEP>"
 
         try:
             from gliner import GLiNER
@@ -39,6 +46,67 @@ class GlinerTritonModel:
         if hasattr(self._model, "to"):
             self._model.to(self._device)
         self._load_chunking_limits()
+
+    @staticmethod
+    def _reasonable_max_length(value: Any) -> int | None:
+        try:
+            as_int = int(value)
+        except Exception:
+            return None
+        if as_int < 2:
+            return None
+        if as_int > 100_000:
+            return None
+        return as_int
+
+    @classmethod
+    def _resolve_encoder_max_len(cls, *, encoder_name: str, encoder_tokenizer: Any) -> int:
+        max_pos: int | None = None
+        try:
+            from transformers import AutoConfig
+        except Exception:
+            AutoConfig = None  # type: ignore[assignment]
+        if AutoConfig is not None:
+            try:
+                cfg = AutoConfig.from_pretrained(encoder_name)
+                max_pos = cls._reasonable_max_length(getattr(cfg, "max_position_embeddings", None))
+            except Exception:
+                max_pos = None
+        if max_pos is None:
+            max_pos = cls._reasonable_max_length(getattr(encoder_tokenizer, "model_max_length", None))
+        if max_pos is None:
+            raise RuntimeError("unable to determine GLiNER encoder context length (refuse to risk silent truncation)")
+        return int(max_pos)
+
+    @staticmethod
+    def _extract_truncation_warning(messages: list[warnings.WarningMessage]) -> str | None:
+        for msg in messages:
+            try:
+                text = str(msg.message)
+            except Exception:
+                continue
+            if re.search(r"Sentence of length .*truncated to", text, flags=re.IGNORECASE):
+                return text
+        return None
+
+    def _prompt_str_for_length_check(self, *, labels: list[str]) -> str:
+        return " ".join(
+            build_prompt_tokens_for_length_check(
+                ent_token=self._ent_token,
+                sep_token=self._sep_token,
+                labels=labels,
+            )
+        )
+
+    def _would_tokenizer_truncate(self, *, prompt_str: str, chunk_text: str) -> bool:
+        if self._encoder_tokenizer is None or self._encoder_max_len is None:
+            raise RuntimeError("GLiNER tokenizer limits are not initialized")
+        full = prompt_str if not chunk_text else (prompt_str + " " + chunk_text if prompt_str else chunk_text)
+        enc = self._encoder_tokenizer(full, add_special_tokens=True, truncation=False)
+        input_ids = enc.get("input_ids") if isinstance(enc, dict) else getattr(enc, "input_ids", None)
+        if input_ids is None:
+            raise RuntimeError("unable to inspect tokenizer output (refuse to risk silent truncation)")
+        return len(input_ids) > int(self._encoder_max_len)
 
     def _load_chunking_limits(self) -> None:
         gliner_cfg: dict[str, Any] | None = None
@@ -67,6 +135,14 @@ class GlinerTritonModel:
             raise RuntimeError("unable to determine GLiNER max_len (refuse to risk silent truncation)") from exc
         if max_len < 2:
             raise RuntimeError("invalid GLiNER max_len (refuse to risk silent truncation)")
+        self._max_len_words = int(max_len)
+        raw_max_width = gliner_cfg.get("max_width", 10)
+        try:
+            self._max_width = int(raw_max_width)
+        except Exception:
+            self._max_width = 10
+        self._ent_token = str(gliner_cfg.get("ent_token") or gliner_cfg.get("entity_token") or "<ENT>")
+        self._sep_token = str(gliner_cfg.get("sep_token") or gliner_cfg.get("separator_token") or "<SEP>")
         try:
             from transformers import AutoTokenizer
         except Exception as exc:
@@ -74,13 +150,8 @@ class GlinerTritonModel:
         encoder_tokenizer = AutoTokenizer.from_pretrained(encoder_name, use_fast=True)
         if not bool(getattr(encoder_tokenizer, "is_fast", False)):
             raise RuntimeError("fast tokenizer is required for safe chunking (offsets mapping)")
-        specials = int(getattr(encoder_tokenizer, "num_special_tokens_to_add", lambda **_: 0)(pair=False))
-        cap = int(max_len) - max(0, specials)
-        if cap < 2:
-            raise RuntimeError("invalid derived GLiNER context length")
+        self._encoder_max_len = self._resolve_encoder_max_len(encoder_name=encoder_name, encoder_tokenizer=encoder_tokenizer)
         self._encoder_tokenizer = encoder_tokenizer
-        self._max_input_tokens = int(cap)
-        self._overlap_tokens = deterministic_overlap_tokens(int(cap))
 
     @staticmethod
     def _decode_cell(cell: object) -> str:
@@ -104,19 +175,54 @@ class GlinerTritonModel:
                 labels = []
             labels = [str(item) for item in labels]
 
-            if self._encoder_tokenizer is None or self._max_input_tokens is None or self._overlap_tokens is None:
-                raise RuntimeError("GLiNER tokenizer chunking is not initialized")
-            windows = chunk_text(
-                text=raw_text,
-                tokenizer=self._encoder_tokenizer,
-                max_input_tokens=self._max_input_tokens,
-                overlap_tokens=self._overlap_tokens,
-            )
-            chunk_texts = [raw_text[w.text_start : w.text_end] for w in windows]
-            # GLiNER batching support varies; keep it simple per chunk.
+            if self._encoder_tokenizer is None or self._encoder_max_len is None or self._max_len_words is None:
+                raise RuntimeError("GLiNER tokenizer limits are not initialized")
+
+            prompt_len = gliner_prompt_len_words(labels)
+            max_text_words = int(self._max_len_words) - int(prompt_len)
+            if max_text_words < 1:
+                raise RuntimeError("GLiNER prompt consumes entire context window (refuse to risk truncation)")
+
+            prompt_str = self._prompt_str_for_length_check(labels=labels)
+            if self._would_tokenizer_truncate(prompt_str=prompt_str, chunk_text=""):
+                raise RuntimeError("GLiNER prompt exceeds encoder context length (refuse to risk truncation)")
+
+            attempt_words = int(max_text_words)
+            while True:
+                overlap_words = deterministic_overlap_words(max_len_words=attempt_words, max_width=int(self._max_width))
+                windows = chunk_text_by_gliner_words(
+                    text=raw_text,
+                    max_text_words=attempt_words,
+                    overlap_words=overlap_words,
+                )
+                chunk_texts = [raw_text[w.text_start : w.text_end] for w in windows]
+
+                overflow = False
+                for chunk in chunk_texts:
+                    if self._would_tokenizer_truncate(prompt_str=prompt_str, chunk_text=chunk):
+                        overflow = True
+                        break
+                if overflow:
+                    next_words = attempt_words // 2
+                    if next_words < 1:
+                        raise RuntimeError("unable to build GLiNER chunks without tokenizer truncation")
+                    attempt_words = next_words
+                    continue
+
+                with warnings.catch_warnings(record=True) as caught:
+                    warnings.simplefilter("always")
+                    preds_by_chunk = self._infer_gliner_chunks(chunk_texts, labels=labels, threshold=raw_threshold)
+                trunc_msg = self._extract_truncation_warning(list(caught))
+                if trunc_msg is not None:
+                    next_words = attempt_words // 2
+                    if next_words < 1:
+                        raise RuntimeError(f"GLiNER truncation could not be eliminated: {trunc_msg}")
+                    attempt_words = next_words
+                    continue
+                break
+
             dedup: dict[tuple[int, int, str], dict[str, Any]] = {}
-            for window, chunk in zip(windows, chunk_texts, strict=False):
-                preds = self._model.predict_entities(chunk, labels, threshold=raw_threshold)
+            for window, preds in zip(windows, preds_by_chunk, strict=False):
                 if not isinstance(preds, list):
                     continue
                 for item in preds:
@@ -146,6 +252,28 @@ class GlinerTritonModel:
             outputs.append([json.dumps(predictions, ensure_ascii=False).encode("utf-8")])
 
         return {"detections_json": np.array(outputs, dtype=object)}
+
+    def _infer_gliner_chunks(self, chunk_texts: list[str], *, labels: list[str], threshold: float) -> list[list[dict[str, Any]]]:
+        # Prefer batched inference where available; fall back to per-text for compatibility.
+        if hasattr(self._model, "inference"):
+            try:
+                batch_size = max(1, min(int(self._max_batch_size), len(chunk_texts)))
+                outputs = self._model.inference(
+                    chunk_texts,
+                    labels=labels,
+                    threshold=threshold,
+                    flat_ner=True,
+                    batch_size=batch_size,
+                )
+                if isinstance(outputs, list):
+                    return [list(item) if isinstance(item, list) else [] for item in outputs]
+            except Exception:
+                pass
+        results: list[list[dict[str, Any]]] = []
+        for chunk in chunk_texts:
+            preds = self._model.predict_entities(chunk, labels, threshold=threshold)
+            results.append(list(preds) if isinstance(preds, list) else [])
+        return results
 
     def binding(self) -> TritonModelBinding:
         from pytriton.decorators import batch

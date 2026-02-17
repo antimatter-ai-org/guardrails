@@ -228,7 +228,7 @@ def _ensure_runtime_models_ready(
     service: PresidioAnalysisService,
     policy_name: str,
     analyzer_profile: str,
-    timeout_s: float,
+    timeout_s: float | None,
 ) -> None:
     readiness_errors = service.ensure_profile_runtimes_ready(
         profile_names=[analyzer_profile],

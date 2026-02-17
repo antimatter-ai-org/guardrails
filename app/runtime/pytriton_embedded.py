@@ -23,7 +23,9 @@ class EmbeddedPyTritonConfig:
     enable_nemotron: bool
     grpc_port: int = 8001
     metrics_port: int = 8002
-    readiness_timeout_s: float = 120.0
+    # Deprecated: kept for backward compatibility as a per-HTTP socket timeout only.
+    # Readiness itself is not subject to a global deadline.
+    readiness_timeout_s: float | None = None
 
 
 def _is_loopback_host(host: str) -> bool:

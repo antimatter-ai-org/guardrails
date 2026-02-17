@@ -13,7 +13,7 @@ class _FakeRuntime:
         self._raises = raises
         self.calls = 0
 
-    def ensure_ready(self, timeout_s: float) -> bool:
+    def ensure_ready(self, timeout_s: float | None) -> bool:
         self.calls += 1
         if self._raises:
             raise RuntimeError("readiness failed")

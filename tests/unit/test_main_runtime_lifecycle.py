@@ -53,38 +53,38 @@ class _FakePolicyResolver:
 
 
 @pytest.mark.asyncio
-async def test_startup_starts_embedded_pytriton_in_cuda_mode(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_startup_schedules_background_init_in_cuda_mode(monkeypatch: pytest.MonkeyPatch) -> None:
     redis_client = _FakeRedis()
-    manager = _FakeEmbeddedManager(client_url="127.0.0.1:9011")
+    scheduled: list[bool] = []
 
     monkeypatch.setattr(main.settings, "runtime_mode", "cuda")
     monkeypatch.setattr(main.settings, "pytriton_url", "127.0.0.1:8000")
     monkeypatch.setattr(main, "apply_model_env", lambda **kwargs: None)
     monkeypatch.setattr(main.Redis, "from_url", lambda *args, **kwargs: redis_client)
-    monkeypatch.setattr(main, "_build_embedded_pytriton_manager", lambda: manager)
     monkeypatch.setattr(main, "_load_runtime", lambda: None)
+    monkeypatch.setattr(main, "_schedule_model_init", lambda: scheduled.append(True))
 
     await main.startup()
-    assert manager.start_calls == 1
-    assert main.app.state.embedded_pytriton_manager is manager
-    assert main.settings.pytriton_url == "127.0.0.1:9011"
+    assert scheduled == [True]
+    assert main.app.state.embedded_pytriton_manager is None
 
     await main.shutdown()
-    assert manager.stop_calls == 1
     assert redis_client.closed is True
 
 
 @pytest.mark.asyncio
 async def test_startup_skips_embedded_pytriton_in_cpu_mode(monkeypatch: pytest.MonkeyPatch) -> None:
     redis_client = _FakeRedis()
+    scheduled: list[bool] = []
 
     monkeypatch.setattr(main.settings, "runtime_mode", "cpu")
     monkeypatch.setattr(main, "apply_model_env", lambda **kwargs: None)
     monkeypatch.setattr(main.Redis, "from_url", lambda *args, **kwargs: redis_client)
-    monkeypatch.setattr(main, "_build_embedded_pytriton_manager", lambda: (_ for _ in ()).throw(AssertionError("should not build manager")))
     monkeypatch.setattr(main, "_load_runtime", lambda: None)
+    monkeypatch.setattr(main, "_schedule_model_init", lambda: scheduled.append(True))
 
     await main.startup()
+    assert scheduled == [True]
     assert main.app.state.embedded_pytriton_manager is None
     await main.shutdown()
     assert redis_client.closed is True
@@ -119,6 +119,7 @@ async def test_readyz_passes_without_embedded_pytriton_in_cpu_mode(monkeypatch: 
 async def test_readyz_fails_when_models_not_ready(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(main.settings, "runtime_mode", "cpu")
     main.app.state.models_ready = False
+    main.app.state.models_load_error = None
     main.app.state.redis = _FakeRedis(ping_result=True)
     main.app.state.embedded_pytriton_manager = None
 
@@ -129,61 +130,46 @@ async def test_readyz_fails_when_models_not_ready(monkeypatch: pytest.MonkeyPatc
     assert "model runtimes are still loading" in str(exc.value.detail)
 
 
-def test_load_runtime_warms_profiles_in_cpu_mode(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.asyncio
+async def test_background_init_sets_models_ready_on_success(monkeypatch: pytest.MonkeyPatch) -> None:
     class _FakeAnalysisService:
-        def __init__(self, config: Any) -> None:
-            self.config = config
-            self.calls: list[tuple[list[str], float]] = []
-
-        def ensure_profile_runtimes_ready(self, *, profile_names: list[str], timeout_s: float) -> dict[str, str]:
-            self.calls.append((profile_names, timeout_s))
+        def ensure_profile_runtimes_ready(self, *, profile_names: list[str], timeout_s: float | None) -> dict[str, str]:
+            assert timeout_s is None
             return {}
 
-    fake_config = type(
-        "_Cfg",
-        (),
-        {
-            "analyzer_profiles": {"external_rich": object(), "strict_profile": object()},
-            "recognizer_definitions": {"gliner_pii_multilingual": object()},
-        },
-    )()
-    fake_analysis = _FakeAnalysisService(fake_config)
+    fake_config = type("_Cfg", (), {"analyzer_profiles": {"external_rich": object()}, "recognizer_definitions": {}})()
+
+    def fake_load_runtime() -> None:
+        main.app.state.policy_resolver = _FakePolicyResolver(fake_config)
+        main.app.state.analysis_service = _FakeAnalysisService()
 
     monkeypatch.setattr(main.settings, "runtime_mode", "cpu")
-    monkeypatch.setattr(main.settings, "pytriton_init_timeout_s", 21.0)
-    monkeypatch.setattr(main, "load_policy_config", lambda *_args, **_kwargs: fake_config)
-    monkeypatch.setattr(main, "PolicyResolver", _FakePolicyResolver)
-    monkeypatch.setattr(main, "PresidioAnalysisService", lambda _config: fake_analysis)
-    monkeypatch.setattr(main, "GuardrailsService", lambda **_kwargs: object())
-    main.app.state.mapping_store = object()
+    monkeypatch.setattr(main, "_load_runtime", fake_load_runtime)
 
-    main._load_runtime()
+    main.app.state.models_ready = False
+    await main._initialize_models_in_background()
 
-    assert fake_analysis.calls == [(["external_rich", "strict_profile"], 21.0)]
+    assert main.app.state.models_ready is True
+    assert main.app.state.models_load_error is None
 
 
-def test_load_runtime_raises_when_runtime_readiness_fails(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.asyncio
+async def test_background_init_records_error_on_failure(monkeypatch: pytest.MonkeyPatch) -> None:
     class _FakeAnalysisService:
-        def __init__(self, config: Any) -> None:
-            self.config = config
-
-        def ensure_profile_runtimes_ready(self, *, profile_names: list[str], timeout_s: float) -> dict[str, str]:
+        def ensure_profile_runtimes_ready(self, *, profile_names: list[str], timeout_s: float | None) -> dict[str, str]:
             return {"external_rich:gliner": "runtime is not ready"}
 
-    fake_config = type(
-        "_Cfg",
-        (),
-        {
-            "analyzer_profiles": {"external_rich": object()},
-            "recognizer_definitions": {"gliner_pii_multilingual": object()},
-        },
-    )()
+    fake_config = type("_Cfg", (), {"analyzer_profiles": {"external_rich": object()}, "recognizer_definitions": {}})()
 
-    monkeypatch.setattr(main, "load_policy_config", lambda *_args, **_kwargs: fake_config)
-    monkeypatch.setattr(main, "PolicyResolver", _FakePolicyResolver)
-    monkeypatch.setattr(main, "PresidioAnalysisService", lambda _config: _FakeAnalysisService(fake_config))
-    monkeypatch.setattr(main, "GuardrailsService", lambda **_kwargs: object())
-    main.app.state.mapping_store = object()
+    def fake_load_runtime() -> None:
+        main.app.state.policy_resolver = _FakePolicyResolver(fake_config)
+        main.app.state.analysis_service = _FakeAnalysisService()
 
-    with pytest.raises(RuntimeError, match="model runtime readiness check failed"):
-        main._load_runtime()
+    monkeypatch.setattr(main.settings, "runtime_mode", "cpu")
+    monkeypatch.setattr(main, "_load_runtime", fake_load_runtime)
+
+    main.app.state.models_ready = False
+    await main._initialize_models_in_background()
+
+    assert main.app.state.models_ready is False
+    assert "runtime readiness check failed" in str(main.app.state.models_load_error or "")

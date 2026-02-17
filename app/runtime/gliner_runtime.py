@@ -2,17 +2,20 @@ from __future__ import annotations
 
 import json
 import re
+import warnings
 from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 
-from app.runtime.tokenizer_chunking import (
-    TextChunkWindow,
-    chunk_text,
-    deterministic_overlap_tokens,
+from app.runtime.gliner_word_chunking import (
+    build_prompt_tokens_for_length_check,
+    chunk_text_by_gliner_words,
+    deterministic_overlap_words,
+    gliner_prompt_len_words,
 )
+from app.runtime.tokenizer_chunking import TextChunkWindow
 from app.runtime.triton_readiness import (
     TritonModelContract,
     TritonTensorContract,
@@ -27,7 +30,7 @@ class GlinerRuntime(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def ensure_ready(self, timeout_s: float) -> bool:
+    def ensure_ready(self, timeout_s: float | None) -> bool:
         raise NotImplementedError
 
     @abstractmethod
@@ -49,8 +52,8 @@ class LocalCpuGlinerRuntime(GlinerRuntime):
         self._model_name = model_name
         self._model: Any | None = None
         self._encoder_tokenizer: Any | None = None
-        self._max_input_tokens: int | None = None
-        self._overlap_tokens: int | None = None
+        self._encoder_max_len: int | None = None
+        self._gliner_cfg: dict[str, Any] | None = None
         self._load_error: str | None = None
         self._load_model()
 
@@ -78,19 +81,71 @@ class LocalCpuGlinerRuntime(GlinerRuntime):
         return None
 
     @staticmethod
-    def _derive_chunking_limits(*, gliner_cfg: dict[str, Any], encoder_tokenizer: Any) -> int:
-        raw_max_len = gliner_cfg.get("max_len")
+    def _reasonable_max_length(value: Any) -> int | None:
         try:
-            max_len = int(raw_max_len)
-        except Exception as exc:
-            raise RuntimeError("unable to determine GLiNER max_len (refuse to risk silent truncation)") from exc
-        if max_len < 2:
-            raise RuntimeError("invalid GLiNER max_len (refuse to risk silent truncation)")
-        specials = int(getattr(encoder_tokenizer, "num_special_tokens_to_add", lambda **_: 0)(pair=False))
-        cap = max_len - max(0, specials)
-        if cap < 2:
-            raise RuntimeError("invalid derived GLiNER context length")
-        return cap
+            as_int = int(value)
+        except Exception:
+            return None
+        if as_int < 2:
+            return None
+        # Many tokenizers use huge sentinels for "infinite".
+        if as_int > 100_000:
+            return None
+        return as_int
+
+    @classmethod
+    def _resolve_encoder_max_len(cls, *, encoder_name: str, encoder_tokenizer: Any) -> int:
+        # GLiNER internally sets truncation=True without explicit max_length.
+        # Refuse to risk silent truncation by ensuring prompt+chunk stay within the
+        # encoder's real context length.
+        max_pos: int | None = None
+        try:
+            from transformers import AutoConfig
+        except Exception:
+            AutoConfig = None  # type: ignore[assignment]
+        if AutoConfig is not None:
+            try:
+                cfg = AutoConfig.from_pretrained(encoder_name)
+                max_pos = cls._reasonable_max_length(getattr(cfg, "max_position_embeddings", None))
+            except Exception:
+                max_pos = None
+        if max_pos is None:
+            max_pos = cls._reasonable_max_length(getattr(encoder_tokenizer, "model_max_length", None))
+        if max_pos is None:
+            raise RuntimeError("unable to determine GLiNER encoder context length (refuse to risk silent truncation)")
+        return int(max_pos)
+
+    @staticmethod
+    def _extract_truncation_warning(messages: list[warnings.WarningMessage]) -> str | None:
+        for msg in messages:
+            try:
+                text = str(msg.message)
+            except Exception:
+                continue
+            # GLiNER warning text (gliner/data_processing/processor.py) includes:
+            # "Sentence of length X has been truncated to Y"
+            if re.search(r"Sentence of length .*truncated to", text, flags=re.IGNORECASE):
+                return text
+        return None
+
+    def _prompt_tokens(self, *, labels: list[str]) -> list[str]:
+        cfg = self._gliner_cfg or {}
+        ent_token = str(cfg.get("ent_token") or cfg.get("entity_token") or "<ENT>")
+        sep_token = str(cfg.get("sep_token") or cfg.get("separator_token") or "<SEP>")
+        return build_prompt_tokens_for_length_check(ent_token=ent_token, sep_token=sep_token, labels=labels)
+
+    def _prompt_str_for_length_check(self, *, labels: list[str]) -> str:
+        return " ".join(self._prompt_tokens(labels=labels))
+
+    def _would_tokenizer_truncate(self, *, prompt_str: str, chunk_text: str) -> bool:
+        if self._encoder_tokenizer is None or self._encoder_max_len is None:
+            raise RuntimeError(self._load_error or "gliner runtime is not ready")
+        full = prompt_str if not chunk_text else (prompt_str + " " + chunk_text if prompt_str else chunk_text)
+        enc = self._encoder_tokenizer(full, add_special_tokens=True, truncation=False)
+        input_ids = enc.get("input_ids") if isinstance(enc, dict) else getattr(enc, "input_ids", None)
+        if input_ids is None:
+            raise RuntimeError("unable to inspect tokenizer output (refuse to risk silent truncation)")
+        return len(input_ids) > int(self._encoder_max_len)
 
     def _load_model(self) -> None:
         try:
@@ -104,7 +159,7 @@ class LocalCpuGlinerRuntime(GlinerRuntime):
             if hasattr(model, "to"):
                 model.to(self.device)
             self._model = model
-            # Strict chunking: derive encoder tokenizer + max_len from GLiNER config.
+            # Strict chunking: load GLiNER config + encoder tokenizer for truncation guards.
             gliner_cfg = self._read_gliner_config(self._model_name) or self._extract_gliner_config_from_model(model)
             if not isinstance(gliner_cfg, dict):
                 raise RuntimeError("unable to read GLiNER config (refuse to risk silent truncation)")
@@ -116,10 +171,12 @@ class LocalCpuGlinerRuntime(GlinerRuntime):
             except Exception as exc:
                 raise RuntimeError("transformers is required for safe chunking") from exc
             encoder_tokenizer = AutoTokenizer.from_pretrained(encoder_name, use_fast=True)
-            max_input_tokens = self._derive_chunking_limits(gliner_cfg=gliner_cfg, encoder_tokenizer=encoder_tokenizer)
+            if not bool(getattr(encoder_tokenizer, "is_fast", False)):
+                raise RuntimeError("fast tokenizer is required for safe chunking (refuse to risk silent truncation)")
+            encoder_max_len = self._resolve_encoder_max_len(encoder_name=encoder_name, encoder_tokenizer=encoder_tokenizer)
             self._encoder_tokenizer = encoder_tokenizer
-            self._max_input_tokens = int(max_input_tokens)
-            self._overlap_tokens = deterministic_overlap_tokens(int(max_input_tokens))
+            self._encoder_max_len = int(encoder_max_len)
+            self._gliner_cfg = dict(gliner_cfg)
         except Exception as exc:  # pragma: no cover - network/model availability dependent
             self._load_error = f"gliner model load error: {exc}"
 
@@ -162,29 +219,73 @@ class LocalCpuGlinerRuntime(GlinerRuntime):
         return sorted(dedup.values(), key=lambda item: (int(item["start"]), int(item["end"]), str(item["label"])))
 
     def predict_entities(self, text: str, labels: list[str], threshold: float) -> list[dict[str, Any]]:
-        if (
-            self._model is None
-            or self._encoder_tokenizer is None
-            or self._max_input_tokens is None
-            or self._overlap_tokens is None
-        ):
+        if self._model is None or self._encoder_tokenizer is None or self._encoder_max_len is None or self._gliner_cfg is None:
             raise RuntimeError(self._load_error or "gliner runtime is not ready")
-        windows = chunk_text(
-            text=text,
-            tokenizer=self._encoder_tokenizer,
-            max_input_tokens=self._max_input_tokens,
-            overlap_tokens=self._overlap_tokens,
-        )
-        chunk_texts = [text[w.text_start : w.text_end] for w in windows]
-        chunk_predictions = self._predict_batch(chunk_texts, labels, threshold)
+
+        # GLiNER truncates based on its own "word splitter" length (max_len). Chunk accordingly.
+        raw_max_len = self._gliner_cfg.get("max_len")
+        raw_max_width = self._gliner_cfg.get("max_width", 10)
+        try:
+            max_len_words = int(raw_max_len)
+            max_width = int(raw_max_width)
+        except Exception as exc:
+            raise RuntimeError("unable to determine GLiNER max_len/max_width (refuse to risk silent truncation)") from exc
+        if max_len_words < 2:
+            raise RuntimeError("invalid GLiNER max_len (refuse to risk silent truncation)")
+
+        prompt_len = gliner_prompt_len_words(labels)
+        max_text_words = max_len_words - int(prompt_len)
+        if max_text_words < 1:
+            raise RuntimeError("GLiNER prompt consumes entire context window (refuse to risk truncation)")
+
+        prompt_str = self._prompt_str_for_length_check(labels=labels)
+        # If prompt alone can overflow the encoder tokenizer window, we cannot scan safely.
+        if self._would_tokenizer_truncate(prompt_str=prompt_str, chunk_text=""):
+            raise RuntimeError("GLiNER prompt exceeds encoder context length (refuse to risk truncation)")
+
+        attempt_words = int(max_text_words)
+        chunk_predictions: list[list[dict[str, Any]]] | None = None
+        windows: list[TextChunkWindow] | None = None
+        while True:
+            overlap_words = deterministic_overlap_words(max_len_words=attempt_words, max_width=max_width)
+            windows = chunk_text_by_gliner_words(text=text, max_text_words=attempt_words, overlap_words=overlap_words)
+            chunk_texts = [text[w.text_start : w.text_end] for w in windows]
+
+            # Guard against silent transformer tokenizer truncation.
+            overflow = False
+            for chunk in chunk_texts:
+                if self._would_tokenizer_truncate(prompt_str=prompt_str, chunk_text=chunk):
+                    overflow = True
+                    break
+            if overflow:
+                next_words = attempt_words // 2
+                if next_words < 1:
+                    raise RuntimeError("unable to build GLiNER chunks without tokenizer truncation")
+                attempt_words = next_words
+                continue
+
+            with warnings.catch_warnings(record=True) as caught:
+                warnings.simplefilter("always")
+                chunk_predictions = self._predict_batch(chunk_texts, labels, threshold)
+            trunc_msg = self._extract_truncation_warning(list(caught))
+            if trunc_msg is not None:
+                next_words = attempt_words // 2
+                if next_words < 1:
+                    raise RuntimeError(f"GLiNER truncation could not be eliminated: {trunc_msg}")
+                attempt_words = next_words
+                continue
+            break
+
+        if windows is None or chunk_predictions is None:
+            raise RuntimeError("GLiNER runtime failed to produce predictions")
         return self._merge_window_predictions(
             text=text,
-            windows=windows,
+            windows=list(windows),
             window_predictions=chunk_predictions,
             default_threshold=threshold,
         )
 
-    def ensure_ready(self, timeout_s: float) -> bool:
+    def ensure_ready(self, timeout_s: float | None) -> bool:
         _ = timeout_s
         return self._model is not None
 
@@ -227,14 +328,15 @@ class PyTritonGlinerRuntime(GlinerRuntime):
         triton_model_name: str,
         hf_model_name: str,
         pytriton_url: str,
-        init_timeout_s: float,
+        init_timeout_s: float | None,
         infer_timeout_s: float | None,
     ) -> None:
         self._model_name = triton_model_name
         self._hf_model_name = hf_model_name
         self._pytriton_url = pytriton_url
         # init timeout should dominate only if infer timeout is set.
-        self._init_timeout_s = float(init_timeout_s)
+        # NOTE: init timeout is not an inference wall-clock cap; inference_timeout_s must stay None.
+        self._init_timeout_s = float(init_timeout_s) if init_timeout_s is not None else 120.0
         if infer_timeout_s is not None:
             self._init_timeout_s = max(self._init_timeout_s, float(infer_timeout_s))
         self._infer_timeout_s = infer_timeout_s
@@ -243,8 +345,8 @@ class PyTritonGlinerRuntime(GlinerRuntime):
         self._ready = False
         self._load_error: str | None = None
         self._encoder_tokenizer: Any | None = None
-        self._max_input_tokens: int | None = None
-        self._overlap_tokens: int | None = None
+        self._encoder_max_len: int | None = None
+        self._gliner_cfg: dict[str, Any] | None = None
         self._contract = TritonModelContract(
             name=triton_model_name,
             inputs=(
@@ -273,13 +375,15 @@ class PyTritonGlinerRuntime(GlinerRuntime):
             return
         try:
             encoder_tokenizer = AutoTokenizer.from_pretrained(encoder_name, use_fast=True)
-            max_input_tokens = LocalCpuGlinerRuntime._derive_chunking_limits(  # noqa: SLF001
-                gliner_cfg=gliner_cfg,
+            if not bool(getattr(encoder_tokenizer, "is_fast", False)):
+                raise RuntimeError("fast tokenizer is required for safe chunking (refuse to risk silent truncation)")
+            encoder_max_len = LocalCpuGlinerRuntime._resolve_encoder_max_len(  # noqa: SLF001
+                encoder_name=encoder_name,
                 encoder_tokenizer=encoder_tokenizer,
             )
             self._encoder_tokenizer = encoder_tokenizer
-            self._max_input_tokens = int(max_input_tokens)
-            self._overlap_tokens = deterministic_overlap_tokens(int(max_input_tokens))
+            self._encoder_max_len = int(encoder_max_len)
+            self._gliner_cfg = dict(gliner_cfg)
         except Exception as exc:  # pragma: no cover
             self._load_error = f"gliner tokenizer load error: {exc}"
 
@@ -298,18 +402,53 @@ class PyTritonGlinerRuntime(GlinerRuntime):
     def predict_entities(self, text: str, labels: list[str], threshold: float) -> list[dict[str, Any]]:
         if not self._ready:
             raise RuntimeError(self._load_error or "pytriton gliner runtime is not ready")
-        if self._encoder_tokenizer is None or self._max_input_tokens is None or self._overlap_tokens is None:
+        if self._encoder_tokenizer is None or self._encoder_max_len is None or self._gliner_cfg is None:
             self._load_tokenizer()
-        if self._encoder_tokenizer is None or self._max_input_tokens is None or self._overlap_tokens is None:
+        if self._encoder_tokenizer is None or self._encoder_max_len is None or self._gliner_cfg is None:
             raise RuntimeError(self._load_error or "pytriton gliner runtime is not ready")
-        windows = chunk_text(
-            text=text,
-            tokenizer=self._encoder_tokenizer,
-            max_input_tokens=self._max_input_tokens,
-            overlap_tokens=self._overlap_tokens,
-        )
-        chunk_texts = [text[w.text_start : w.text_end] for w in windows]
-        chunk_predictions = self._predict_batch(chunk_texts, labels, threshold)
+
+        raw_max_len = self._gliner_cfg.get("max_len")
+        raw_max_width = self._gliner_cfg.get("max_width", 10)
+        try:
+            max_len_words = int(raw_max_len)
+            max_width = int(raw_max_width)
+        except Exception as exc:
+            raise RuntimeError("unable to determine GLiNER max_len/max_width (refuse to risk silent truncation)") from exc
+        if max_len_words < 2:
+            raise RuntimeError("invalid GLiNER max_len (refuse to risk silent truncation)")
+
+        prompt_len = gliner_prompt_len_words(labels)
+        max_text_words = max_len_words - int(prompt_len)
+        if max_text_words < 1:
+            raise RuntimeError("GLiNER prompt consumes entire context window (refuse to risk truncation)")
+
+        # Client-side defense: avoid silent encoder truncation even before hitting the server.
+        cfg = self._gliner_cfg or {}
+        ent_token = str(cfg.get("ent_token") or cfg.get("entity_token") or "<ENT>")
+        sep_token = str(cfg.get("sep_token") or cfg.get("separator_token") or "<SEP>")
+        prompt_str = " ".join(build_prompt_tokens_for_length_check(ent_token=ent_token, sep_token=sep_token, labels=labels))
+        if LocalCpuGlinerRuntime._would_tokenizer_truncate(self, prompt_str=prompt_str, chunk_text=""):  # noqa: SLF001
+            raise RuntimeError("GLiNER prompt exceeds encoder context length (refuse to risk truncation)")
+
+        attempt_words = int(max_text_words)
+        while True:
+            overlap_words = deterministic_overlap_words(max_len_words=attempt_words, max_width=max_width)
+            windows = chunk_text_by_gliner_words(text=text, max_text_words=attempt_words, overlap_words=overlap_words)
+            chunk_texts = [text[w.text_start : w.text_end] for w in windows]
+            overflow = False
+            for chunk in chunk_texts:
+                if LocalCpuGlinerRuntime._would_tokenizer_truncate(self, prompt_str=prompt_str, chunk_text=chunk):  # noqa: SLF001
+                    overflow = True
+                    break
+            if overflow:
+                next_words = attempt_words // 2
+                if next_words < 1:
+                    raise RuntimeError("unable to build GLiNER chunks without tokenizer truncation")
+                attempt_words = next_words
+                continue
+            chunk_predictions = self._predict_batch(chunk_texts, labels, threshold)
+            break
+
         return LocalCpuGlinerRuntime._merge_window_predictions(  # noqa: SLF001
             text=text,
             windows=windows,
@@ -317,14 +456,14 @@ class PyTritonGlinerRuntime(GlinerRuntime):
             default_threshold=threshold,
         )
 
-    def ensure_ready(self, timeout_s: float) -> bool:
+    def ensure_ready(self, timeout_s: float | None) -> bool:
         if self._ready:
             return True
         try:
             wait_for_triton_ready(
                 pytriton_url=self._pytriton_url,
                 contracts=[self._contract],
-                timeout_s=max(0.1, float(timeout_s)),
+                timeout_s=timeout_s,
             )
             self._ready = True
             self._load_error = None
@@ -417,7 +556,7 @@ def build_gliner_runtime(
     cpu_device: str,
     pytriton_url: str,
     pytriton_model_name: str,
-    pytriton_init_timeout_s: float,
+    pytriton_init_timeout_s: float | None,
     pytriton_infer_timeout_s: float | None,
 ) -> GlinerRuntime:
     mode = runtime_mode.strip().lower()

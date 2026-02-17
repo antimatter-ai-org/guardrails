@@ -27,7 +27,7 @@ class TokenClassifierRuntime(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def ensure_ready(self, timeout_s: float) -> bool:
+    def ensure_ready(self, timeout_s: float | None) -> bool:
         raise NotImplementedError
 
     @abstractmethod
@@ -80,7 +80,10 @@ class LocalCpuTokenClassifierRuntime(TokenClassifierRuntime):
             pipeline_device = torch.device(self.device)
 
         try:
-            tokenizer = AutoTokenizer.from_pretrained(self._model_name, use_fast=True)
+            try:
+                tokenizer = AutoTokenizer.from_pretrained(self._model_name, use_fast=True, fix_mistral_regex=True)
+            except TypeError:
+                tokenizer = AutoTokenizer.from_pretrained(self._model_name, use_fast=True)
             model = AutoModelForTokenClassification.from_pretrained(self._model_name)
             max_input_tokens = effective_max_tokens_for_token_classifier(model=model, tokenizer=tokenizer)
             self._pipeline = pipeline(
@@ -212,7 +215,7 @@ class LocalCpuTokenClassifierRuntime(TokenClassifierRuntime):
             default_threshold=threshold,
         )
 
-    def ensure_ready(self, timeout_s: float) -> bool:
+    def ensure_ready(self, timeout_s: float | None) -> bool:
         _ = timeout_s
         return self._pipeline is not None
 
@@ -230,13 +233,13 @@ class PyTritonTokenClassifierRuntime(TokenClassifierRuntime):
         triton_model_name: str,
         hf_model_name: str,
         pytriton_url: str,
-        init_timeout_s: float,
+        init_timeout_s: float | None,
         infer_timeout_s: float | None,
     ) -> None:
         self._model_name = triton_model_name
         self._hf_model_name = hf_model_name
         self._pytriton_url = pytriton_url
-        self._init_timeout_s = float(init_timeout_s)
+        self._init_timeout_s = float(init_timeout_s) if init_timeout_s is not None else 120.0
         if infer_timeout_s is not None:
             self._init_timeout_s = max(self._init_timeout_s, float(infer_timeout_s))
         self._infer_timeout_s = infer_timeout_s
@@ -264,7 +267,10 @@ class PyTritonTokenClassifierRuntime(TokenClassifierRuntime):
             self._load_error = f"transformers import error: {exc}"
             return
         try:
-            tokenizer = AutoTokenizer.from_pretrained(self._hf_model_name, use_fast=True)
+            try:
+                tokenizer = AutoTokenizer.from_pretrained(self._hf_model_name, use_fast=True, fix_mistral_regex=True)
+            except TypeError:
+                tokenizer = AutoTokenizer.from_pretrained(self._hf_model_name, use_fast=True)
             model = AutoModelForTokenClassification.from_pretrained(self._hf_model_name)
             max_input_tokens = effective_max_tokens_for_token_classifier(model=model, tokenizer=tokenizer)
             self._tokenizer = tokenizer
@@ -380,14 +386,14 @@ class PyTritonTokenClassifierRuntime(TokenClassifierRuntime):
             default_threshold=threshold,
         )
 
-    def ensure_ready(self, timeout_s: float) -> bool:
+    def ensure_ready(self, timeout_s: float | None) -> bool:
         if self._ready:
             return True
         try:
             wait_for_triton_ready(
                 pytriton_url=self._pytriton_url,
                 contracts=[self._contract],
-                timeout_s=max(0.1, float(timeout_s)),
+                timeout_s=timeout_s,
             )
             self._ready = True
             self._load_error = None
@@ -410,7 +416,7 @@ def build_token_classifier_runtime(
     cpu_device: str,
     pytriton_url: str,
     pytriton_model_name: str,
-    pytriton_init_timeout_s: float,
+    pytriton_init_timeout_s: float | None,
     pytriton_infer_timeout_s: float | None,
     aggregation_strategy: str = "simple",
 ) -> TokenClassifierRuntime:

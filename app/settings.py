@@ -23,7 +23,10 @@ class Settings(BaseSettings):
 
     cpu_device: str = "auto"
     pytriton_url: str = "127.0.0.1:8000"
-    pytriton_init_timeout_s: float = 120.0
+    # Deprecated: this is no longer treated as a global "give up" deadline.
+    # It is only used as a per-request socket timeout for readiness probes and
+    # client initialization where required by third-party libs.
+    pytriton_init_timeout_s: float | None = None
     # Safety-first: do not impose an inference wall-clock cap that could cause
     # partial scanning on long inputs. PyTriton ModelClient accepts None to
     # disable per-request timeouts.

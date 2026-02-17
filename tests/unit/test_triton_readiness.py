@@ -64,18 +64,7 @@ def test_wait_for_triton_ready_fails_on_contract_mismatch(monkeypatch: pytest.Mo
         inputs=(triton_readiness.TritonTensorContract(name="threshold", data_type="TYPE_FP32"),),
         outputs=(triton_readiness.TritonTensorContract(name="detections_json", data_type="TYPE_STRING"),),
     )
-    values = [0.0, 0.05, 0.1, 0.15, 0.2]
-    state = {"idx": 0}
-
-    def fake_monotonic() -> float:
-        idx = state["idx"]
-        if idx >= len(values):
-            return values[-1]
-        state["idx"] = idx + 1
-        return values[idx]
-
     monkeypatch.setattr(triton_readiness.time, "sleep", lambda _seconds: None)
-    monkeypatch.setattr(triton_readiness.time, "monotonic", fake_monotonic)
     monkeypatch.setattr(triton_readiness, "_http_get", lambda *_args, **_kwargs: (200, b"{}"))
     monkeypatch.setattr(
         triton_readiness,

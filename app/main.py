@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 from datetime import UTC, datetime, timedelta
@@ -202,6 +203,19 @@ def _analysis_failed_finding(detector_errors: dict[str, str], *, output_scope: s
         evidence=evidence,
     )
 
+def _models_not_ready_finding(*, output_scope: str) -> Finding:
+    evidence: dict[str, Any] = {"reason": "models_not_ready"}
+    if output_scope == "FULL":
+        evidence["load_error"] = str(getattr(app.state, "models_load_error", None) or "")
+    return Finding(
+        check_id="models",
+        category="system",
+        severity="critical",
+        confidence=1.0,
+        spans=[],
+        evidence=evidence,
+    )
+
 
 def _usage_from_io(input_content: list[ContentItem], output_items: list[OutputItem]) -> UsageInfo:
     return UsageInfo(
@@ -274,13 +288,6 @@ def _load_runtime() -> None:
         analysis_service=analysis_service,
         mapping_store=app.state.mapping_store,
     )
-    readiness_errors = analysis_service.ensure_profile_runtimes_ready(
-        profile_names=sorted(config.analyzer_profiles.keys()),
-        timeout_s=settings.pytriton_init_timeout_s,
-    )
-    if readiness_errors:
-        raise RuntimeError(f"model runtime readiness check failed: {readiness_errors}")
-    app.state.models_ready = True
     logger.info(
         "policy loaded from %s, profiles=%s, recognizers=%s",
         settings.policy_path,
@@ -288,30 +295,67 @@ def _load_runtime() -> None:
         ",".join(sorted(config.recognizer_definitions.keys())),
     )
 
+async def _initialize_models_in_background() -> None:
+    # Run model startup/readiness in the background. The request path will fail
+    # closed (BLOCKED, outputs=[]) while models_ready is false.
+    try:
+        app.state.models_load_error = None
+        if settings.runtime_mode == "cuda":
+            manager = getattr(app.state, "embedded_pytriton_manager", None)
+            if manager is None:
+                manager = _build_embedded_pytriton_manager()
+                app.state.embedded_pytriton_manager = manager
+            await asyncio.to_thread(manager.start)
+            settings.pytriton_url = manager.client_url
+
+        _load_runtime()
+        config = app.state.policy_resolver.config
+        readiness_errors = app.state.analysis_service.ensure_profile_runtimes_ready(
+            profile_names=sorted(config.analyzer_profiles.keys()),
+            timeout_s=None,
+        )
+        if readiness_errors:
+            raise RuntimeError(f"model runtime readiness check failed: {readiness_errors}")
+        app.state.models_ready = True
+        app.state.models_load_error = None
+    except Exception as exc:
+        app.state.models_ready = False
+        app.state.models_load_error = str(exc)
+        logger.exception("model initialization failed: %s", exc)
+
+
+def _schedule_model_init() -> None:
+    app.state.models_ready = False
+    task = getattr(app.state, "models_init_task", None)
+    if task is not None and not task.done():
+        task.cancel()
+    app.state.models_init_task = asyncio.create_task(_initialize_models_in_background())
+
 
 @app.on_event("startup")
 async def startup() -> None:
     apply_model_env(model_dir=settings.model_dir, offline_mode=settings.offline_mode)
     app.state.models_ready = False
-    manager: EmbeddedPyTritonManager | None = None
-    try:
-        if settings.runtime_mode == "cuda":
-            manager = _build_embedded_pytriton_manager()
-            manager.start()
-            settings.pytriton_url = manager.client_url
-        app.state.embedded_pytriton_manager = manager
+    app.state.models_load_error = None
+    app.state.embedded_pytriton_manager = None
 
-        app.state.redis = Redis.from_url(settings.redis_url, decode_responses=False)
-        app.state.mapping_store = RedisMappingStore(app.state.redis)
+    app.state.redis = Redis.from_url(settings.redis_url, decode_responses=False)
+    app.state.mapping_store = RedisMappingStore(app.state.redis)
+
+    # Load policy immediately (fast), then initialize models/readiness in background.
+    try:
         _load_runtime()
-    except Exception:
-        if manager is not None:
-            manager.stop()
-        raise
+    except Exception as exc:
+        app.state.models_load_error = str(exc)
+        logger.exception("policy load failed: %s", exc)
+    _schedule_model_init()
 
 
 @app.on_event("shutdown")
 async def shutdown() -> None:
+    task = getattr(app.state, "models_init_task", None)
+    if task is not None and not task.done():
+        task.cancel()
     manager = getattr(app.state, "embedded_pytriton_manager", None)
     if manager is not None:
         manager.stop()
@@ -329,7 +373,8 @@ async def healthz() -> dict[str, str]:
 async def readyz() -> dict[str, str]:
     try:
         if not bool(getattr(app.state, "models_ready", False)):
-            raise RuntimeError("model runtimes are still loading")
+            load_error = str(getattr(app.state, "models_load_error", None) or "")
+            raise RuntimeError(load_error or "model runtimes are still loading")
         pong = await app.state.redis.ping()
         if not pong:
             raise RuntimeError("redis ping returned false")
@@ -346,8 +391,8 @@ async def readyz() -> dict[str, str]:
 
 @app.post("/admin/reload")
 async def reload_policy() -> dict[str, Any]:
-    app.state.models_ready = False
     _load_runtime()
+    _schedule_model_init()
     config = app.state.policy_resolver.config
     return {
         "status": "reloaded",
@@ -392,6 +437,23 @@ async def apply_endpoint(request: ApplyRequest) -> ApplyResponse:
     output_items: list[OutputItem] = [OutputItem(id=item.id, text=item.text) for item in request.content]
 
     if not transforms:
+        if not bool(getattr(app.state, "models_ready", False)):
+            return ApplyResponse(
+                action="BLOCKED",
+                source=request.source,
+                policy_id=policy_name,
+                policy_version=request.policy_version,
+                outputs=[],
+                findings=[_models_not_ready_finding(output_scope=request.output_scope)],
+                session=None,
+                usage=UsageInfo(
+                    input_items=len(request.content),
+                    input_chars=sum(len(item.text) for item in request.content),
+                    output_items=0,
+                    output_chars=0,
+                ),
+                timings=_timings_from_elapsed_ms(started_at=started_at),
+            )
         try:
             result = await app.state.guardrails.detect_items(items=content_inputs, policy_name=policy_name)
             findings = _findings_from_result_items(items=result.items, output_scope=request.output_scope)
@@ -445,6 +507,23 @@ async def apply_endpoint(request: ApplyRequest) -> ApplyResponse:
     transform = transforms[0]
 
     if transform.mode == "DEIDENTIFY":
+        if not bool(getattr(app.state, "models_ready", False)):
+            return ApplyResponse(
+                action="BLOCKED",
+                source=request.source,
+                policy_id=policy_name,
+                policy_version=request.policy_version,
+                outputs=[],
+                findings=[_models_not_ready_finding(output_scope=request.output_scope)],
+                session=None,
+                usage=UsageInfo(
+                    input_items=len(request.content),
+                    input_chars=sum(len(item.text) for item in request.content),
+                    output_items=0,
+                    output_chars=0,
+                ),
+                timings=_timings_from_elapsed_ms(started_at=started_at),
+            )
         session_id = transform.session.id or f"sess_{uuid4().hex}"
         session_ttl_seconds = int(transform.session.ttl_seconds or policy.storage_ttl_seconds)
         try:

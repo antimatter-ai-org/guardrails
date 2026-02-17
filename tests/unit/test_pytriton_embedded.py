@@ -63,7 +63,7 @@ def _manager_config(url: str = "127.0.0.1:8000") -> EmbeddedPyTritonConfig:
 def test_embedded_pytriton_manager_starts_with_loopback_bindings(monkeypatch: pytest.MonkeyPatch) -> None:
     _install_fake_pytriton(monkeypatch, _FakeTriton)
     _FakeTriton.instances.clear()
-    readiness_calls: list[tuple[str, int, float]] = []
+    readiness_calls: list[tuple[str, int, float | None]] = []
 
     monkeypatch.setattr(pytriton_embedded, "apply_model_env", lambda **kwargs: None)
     monkeypatch.setattr(pytriton_embedded, "resolve_gliner_model_source", lambda **kwargs: "/models/gliner")
@@ -101,7 +101,7 @@ def test_embedded_pytriton_manager_starts_with_loopback_bindings(monkeypatch: py
     assert triton.config.kwargs["http_port"] == 9010
     assert triton.config.kwargs["grpc_port"] == 9101
     assert triton.config.kwargs["metrics_port"] == 9102
-    assert readiness_calls == [("127.0.0.1:9010", 2, 120.0)]
+    assert readiness_calls == [("127.0.0.1:9010", 2, None)]
 
     manager.stop()
     manager.stop()
