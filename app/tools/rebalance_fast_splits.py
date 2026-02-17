@@ -294,6 +294,33 @@ def main() -> int:
                 CommitOperationAdd(path_in_repo="data/fast-00000-of-00001.parquet", path_or_fileobj=str(parquet_path)),
             ]
 
+            # Update README.md front matter dataset_info.splits[fast].num_examples so `datasets.load_dataset`
+            # doesn't enforce stale expected split sizes.
+            try:
+                readme_src = hf_hub_download(repo_id=plan.hf_id, repo_type="dataset", filename="README.md")
+                readme_text = Path(readme_src).read_text(encoding="utf-8")
+                if readme_text.startswith("---"):
+                    end = readme_text.find("\n---", 3)
+                    if end > 0:
+                        fm_raw = readme_text[3:end].lstrip("\n")
+                        body = readme_text[end + 4 :].lstrip("\n")
+                        import yaml  # type: ignore
+
+                        meta = yaml.safe_load(fm_raw) or {}
+                        di = meta.get("dataset_info") or {}
+                        splits = di.get("splits") or []
+                        if isinstance(splits, list):
+                            for item in splits:
+                                if isinstance(item, dict) and item.get("name") == "fast":
+                                    item["num_examples"] = int(len(ds_fast))
+                        meta["dataset_info"] = di
+                        fm_new = yaml.safe_dump(meta, sort_keys=False, allow_unicode=True).strip()
+                        readme_out = td_path / "README.md"
+                        readme_out.write_text(f"---\n{fm_new}\n---\n\n{body}", encoding="utf-8")
+                        ops.append(CommitOperationAdd(path_in_repo="README.md", path_or_fileobj=str(readme_out)))
+            except Exception:
+                pass
+
             # Publish dataset_info.json with updated split sizes so `datasets.load_dataset(...)`
             # doesn't fail split verification on machines with cached/stale expected sizes.
             try:
@@ -318,6 +345,11 @@ def main() -> int:
                 info_path = info_dir / "dataset_info.json"
                 if info_path.exists():
                     ops.append(CommitOperationAdd(path_in_repo="dataset_info.json", path_or_fileobj=str(info_path)))
+                    # Also publish dataset_infos.json (plural) for completeness.
+                    infos_path = info_dir / "dataset_infos.json"
+                    payload = {str(info.config_name): __import__("json").loads(info_path.read_text(encoding="utf-8"))}
+                    infos_path.write_text(__import__("json").dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+                    ops.append(CommitOperationAdd(path_in_repo="dataset_infos.json", path_or_fileobj=str(infos_path)))
             except Exception:
                 # Best effort: fast parquet is still updated; dataset-info mismatch can be resolved by
                 # clearing local caches. Prefer not to fail the entire publish step.
