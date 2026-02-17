@@ -454,7 +454,7 @@ recognizer_definitions:
         IP_ADDRESS: 0.85
         PHONE_NUMBER: 0.78
         TIN: 0.88
-        PERSON: 0.75
+        PERSON: 0.65
         ORGANIZATION: 0.65
       raw_label_thresholds:
         address_geolocation: 0.90
