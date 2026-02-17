@@ -387,7 +387,7 @@ recognizer_definitions:
     enabled: true
     params:
       model_name: "scanpatch/pii-ner-nemotron"
-      threshold: 0.48
+      threshold: 0.40
       aggregation_strategy: "simple"
       triton_model_name: "nemotron"
       labels:
