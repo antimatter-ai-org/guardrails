@@ -41,7 +41,7 @@ def main() -> int:
         raise RuntimeError("datasets package is required (install with guardrails-service[eval]).") from exc
 
     try:
-        from huggingface_hub import CommitOperationAdd, HfApi, get_token  # type: ignore
+        from huggingface_hub import CommitOperationAdd, HfApi, get_token, hf_hub_download  # type: ignore
     except Exception as exc:  # pragma: no cover
         raise RuntimeError("huggingface_hub package is required (install with guardrails-service[eval]).") from exc
 
@@ -88,6 +88,36 @@ def main() -> int:
             payload = {str(info.config_name): __import__("json").loads(info_path.read_text(encoding="utf-8"))}
             infos_path.write_text(__import__("json").dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
+            # datasets also uses the README.md YAML `dataset_info:` block for expected split sizes.
+            # Keep the card content but rewrite only that front-matter field.
+            readme_src = hf_hub_download(repo_id=cfg.hf_id, repo_type="dataset", filename="README.md")
+            readme_text = Path(readme_src).read_text(encoding="utf-8")
+            if not readme_text.startswith("---"):
+                raise RuntimeError(f"README.md has no YAML front matter: {cfg.hf_id}")
+            end = readme_text.find("\n---", 3)
+            if end <= 0:
+                raise RuntimeError(f"README.md front matter terminator not found: {cfg.hf_id}")
+            fm_raw = readme_text[3:end].lstrip("\n")
+            body = readme_text[end + 4 :].lstrip("\n")
+            import yaml  # type: ignore
+
+            meta = yaml.safe_load(fm_raw) or {}
+            di = meta.get("dataset_info") or {}
+            splits = di.get("splits") or []
+            if not isinstance(splits, list):
+                raise RuntimeError(f"README.md dataset_info.splits is not a list: {cfg.hf_id}")
+            updated = False
+            for split in splits:
+                if isinstance(split, dict) and split.get("name") == "fast":
+                    split["num_examples"] = int(target_fast)
+                    updated = True
+            if not updated:
+                raise RuntimeError(f"README.md dataset_info.splits has no fast entry: {cfg.hf_id}")
+            meta["dataset_info"] = di
+            fm_new = yaml.safe_dump(meta, sort_keys=False, allow_unicode=True).strip()
+            readme_out = out_dir / "README.md"
+            readme_out.write_text(f"---\n{fm_new}\n---\n\n{body}", encoding="utf-8")
+
             if not bool(args.push) or bool(args.dry_run):
                 print("dry_run: skipping push")
                 continue
@@ -95,6 +125,7 @@ def main() -> int:
             ops: list[Any] = [
                 CommitOperationAdd(path_in_repo="dataset_info.json", path_or_fileobj=str(info_path)),
                 CommitOperationAdd(path_in_repo="dataset_infos.json", path_or_fileobj=str(infos_path)),
+                CommitOperationAdd(path_in_repo="README.md", path_or_fileobj=str(readme_out)),
             ]
             api.create_commit(
                 repo_id=cfg.hf_id,
