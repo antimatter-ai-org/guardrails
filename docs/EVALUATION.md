@@ -66,6 +66,14 @@ Adding a dataset is done by adding a new entry in that YAML:
 - `datasets.<dataset_id>.scored_labels` describes which labels are supervised and should be included in scoring.
 - `datasets.<dataset_id>.label_map` maps dataset-specific gold labels to canonical labels.
 
+## Long-Context Stress Suite
+
+For very large request performance testing, use the `guardrails_long_context` suite (separate from `guardrails_ru` so the main fast track stays ~10 minutes on GPU):
+
+```bash
+uv run --extra eval python -m app.eval_v3.cli --suite guardrails_long_context --split fast --env-file .env.eval
+```
+
 ## Tasks
 
 The eval runner is task-based. Default `--tasks all` runs:
