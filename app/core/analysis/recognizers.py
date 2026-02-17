@@ -201,7 +201,6 @@ class GlinerPresidioRecognizer(EntityRecognizer):
         labels: list[str],
         threshold: float,
         triton_model_name: str = "gliner",
-        chunking: dict[str, Any] | None = None,
     ) -> None:
         self._labels = [item for item in labels if item]
         self._threshold = float(threshold)
@@ -213,11 +212,6 @@ class GlinerPresidioRecognizer(EntityRecognizer):
             pytriton_model_name=triton_model_name,
             pytriton_init_timeout_s=settings.pytriton_init_timeout_s,
             pytriton_infer_timeout_s=settings.pytriton_infer_timeout_s,
-            chunking_enabled=bool((chunking or {}).get("enabled", True)),
-            chunking_max_tokens=int((chunking or {}).get("max_tokens", 320)),
-            chunking_overlap_tokens=int((chunking or {}).get("overlap_tokens", 64)),
-            chunking_max_chunks=int((chunking or {}).get("max_chunks", 64)),
-            chunking_boundary_lookback_tokens=int((chunking or {}).get("boundary_lookback_tokens", 24)),
         )
         entities = sorted({_normalize_entity_type(label) for label in self._labels})
         super().__init__(
@@ -271,7 +265,6 @@ class TokenClassifierPresidioRecognizer(EntityRecognizer):
         entity_thresholds: dict[str, float] | None = None,
         aggregation_strategy: str = "simple",
         triton_model_name: str = "nemotron",
-        chunking: dict[str, Any] | None = None,
     ) -> None:
         self._threshold = float(threshold)
         self._labels = [str(item).strip() for item in labels if str(item).strip()]
@@ -299,11 +292,6 @@ class TokenClassifierPresidioRecognizer(EntityRecognizer):
             pytriton_init_timeout_s=settings.pytriton_init_timeout_s,
             pytriton_infer_timeout_s=settings.pytriton_infer_timeout_s,
             aggregation_strategy=aggregation_strategy,
-            chunking_enabled=bool((chunking or {}).get("enabled", True)),
-            chunking_max_tokens=int((chunking or {}).get("max_tokens", 320)),
-            chunking_overlap_tokens=int((chunking or {}).get("overlap_tokens", 64)),
-            chunking_max_chunks=int((chunking or {}).get("max_chunks", 64)),
-            chunking_boundary_lookback_tokens=int((chunking or {}).get("boundary_lookback_tokens", 24)),
         )
         # Keep entities broad; exact labels are normalized per model output.
         entities = [
@@ -653,7 +641,6 @@ def _build_gliner_recognizers(
     )
     threshold = float(params.get("threshold", 0.62))
     triton_model_name = str(params.get("triton_model_name", "gliner"))
-    chunking = params.get("chunking", {})
     return [
         GlinerPresidioRecognizer(
             name=recognizer_id,
@@ -662,7 +649,6 @@ def _build_gliner_recognizers(
             labels=labels,
             threshold=threshold,
             triton_model_name=triton_model_name,
-            chunking=chunking if isinstance(chunking, dict) else {},
         )
     ]
 
@@ -689,7 +675,6 @@ def _build_token_classifier_recognizers(
     label_mapping = raw_mapping if isinstance(raw_mapping, dict) else {}
     raw_label_thresholds = params.get("raw_label_thresholds", {})
     entity_thresholds = params.get("entity_thresholds", {})
-    chunking = params.get("chunking", {})
     return [
         TokenClassifierPresidioRecognizer(
             name=recognizer_id,
@@ -702,7 +687,6 @@ def _build_token_classifier_recognizers(
             entity_thresholds=entity_thresholds if isinstance(entity_thresholds, dict) else {},
             aggregation_strategy=aggregation_strategy,
             triton_model_name=triton_model_name,
-            chunking=chunking if isinstance(chunking, dict) else {},
         )
     ]
 

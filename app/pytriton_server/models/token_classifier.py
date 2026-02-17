@@ -7,6 +7,11 @@ from typing import Any
 import numpy as np
 
 from app.pytriton_server.models.base import TritonModelBinding
+from app.runtime.tokenizer_chunking import (
+    chunk_text,
+    deterministic_overlap_tokens,
+    effective_max_tokens_for_token_classifier,
+)
 from app.runtime.torch_runtime import resolve_torch_device
 
 
@@ -46,6 +51,12 @@ class TokenClassifierTritonModel:
 
         tokenizer = AutoTokenizer.from_pretrained(self._hf_model_name)
         model = AutoModelForTokenClassification.from_pretrained(self._hf_model_name)
+        # Strict chunking: refuse to run without a fast tokenizer (offsets required).
+        if not bool(getattr(tokenizer, "is_fast", False)):
+            raise RuntimeError("fast tokenizer is required for safe chunking (offsets mapping)")
+        self._tokenizer = tokenizer
+        self._max_input_tokens = int(effective_max_tokens_for_token_classifier(model=model, tokenizer=tokenizer))
+        self._overlap_tokens = deterministic_overlap_tokens(self._max_input_tokens)
         self._pipeline = pipeline(
             task="token-classification",
             model=model,
@@ -96,38 +107,47 @@ class TokenClassifierTritonModel:
             normalized = {_normalize_label(str(item)).lower() for item in data if str(item).strip()}
             parsed_labels.append(normalized)
 
-        raw_outputs = self._pipeline(texts, batch_size=max(1, min(self._max_batch_size, len(texts))))
-        batch_predictions = self._normalize_outputs(raw_outputs, expected_batch=len(texts))
-
         outputs: list[list[bytes]] = []
-        for sample_text, sample_threshold, allowed_labels, predictions in zip(
-            texts, thresholds, parsed_labels, batch_predictions, strict=False
-        ):
-            sample_output: list[dict[str, Any]] = []
-            for item in predictions:
-                if not isinstance(item, dict):
-                    continue
-                start = int(item.get("start", -1))
-                end = int(item.get("end", -1))
-                if end <= start:
-                    continue
-                score = float(item.get("score", 0.0))
-                if score < sample_threshold:
-                    continue
-                label = _normalize_label(str(item.get("entity_group", item.get("entity", ""))))
-                if not label:
-                    continue
-                if allowed_labels and label.lower() not in allowed_labels:
-                    continue
-                sample_output.append(
-                    {
-                        "start": start,
-                        "end": end,
-                        "text": sample_text[start:end],
-                        "label": label,
-                        "score": score,
-                    }
-                )
+        for sample_text, sample_threshold, allowed_labels in zip(texts, thresholds, parsed_labels, strict=False):
+            windows = chunk_text(
+                text=sample_text,
+                tokenizer=self._tokenizer,
+                max_input_tokens=self._max_input_tokens,
+                overlap_tokens=self._overlap_tokens,
+            )
+            chunk_texts = [sample_text[w.text_start : w.text_end] for w in windows]
+            chunk_raw = self._pipeline(chunk_texts, batch_size=max(1, min(self._max_batch_size, len(chunk_texts))))
+            chunk_batches = self._normalize_outputs(chunk_raw, expected_batch=len(chunk_texts))
+            dedup: dict[tuple[int, int, str], dict[str, Any]] = {}
+            for window, predictions in zip(windows, chunk_batches, strict=False):
+                for item in predictions:
+                    if not isinstance(item, dict):
+                        continue
+                    start = int(item.get("start", -1))
+                    end = int(item.get("end", -1))
+                    if end <= start:
+                        continue
+                    score = float(item.get("score", 0.0))
+                    if score < sample_threshold:
+                        continue
+                    label = _normalize_label(str(item.get("entity_group", item.get("entity", ""))))
+                    if not label:
+                        continue
+                    if allowed_labels and label.lower() not in allowed_labels:
+                        continue
+                    global_start = int(window.text_start) + start
+                    global_end = int(window.text_start) + end
+                    key = (global_start, global_end, label)
+                    existing = dedup.get(key)
+                    if existing is None or score > float(existing.get("score", 0.0)):
+                        dedup[key] = {
+                            "start": global_start,
+                            "end": global_end,
+                            "text": sample_text[global_start:global_end],
+                            "label": label,
+                            "score": score,
+                        }
+            sample_output = sorted(dedup.values(), key=lambda item: (int(item["start"]), int(item["end"]), str(item["label"])))
             outputs.append([json.dumps(sample_output, ensure_ascii=False).encode("utf-8")])
 
         return {"detections_json": np.array(outputs, dtype=object)}

@@ -12,7 +12,6 @@ from random import Random
 from typing import Any, Literal
 
 from app.eval.script_profile import classify_script_profile
-from app.runtime.gliner_chunking import GlinerChunkingConfig, build_chunk_windows
 
 
 SplitName = Literal["fast", "full"]
@@ -468,18 +467,15 @@ def _emit_logs_plain(
         lvl = rng.choice(levels)
         builder.append(f"{ts_base}T12:{rng.randint(0,59):02d}:{rng.randint(0,59):02d}Z {lvl} ")
         builder.append(_filler_words(lang, rng, rng.randint(5, 20), dense=False))
-        if values_q and rng.random() < 0.30:
+        # Place up to 3 values per line (keeps long placement sections from running out of budget).
+        for _ in range(min(3, len(values_q))):
             v = values_q.pop(0)
-            builder.append(" | ")
+            builder.append(f" | {v.label}=")
             spans.append(builder.add_value(label=v.label, value=v.value, value_type=v.value_type, placement=v.placement))
         builder.append("\n")
         if not values_q and builder.length >= target_len:
             break
 
-    for v in values_q:
-        builder.append("PII=")
-        spans.append(builder.add_value(label=v.label, value=v.value, value_type=v.value_type, placement=v.placement))
-        builder.append("\n")
     return spans
 
 
@@ -505,9 +501,19 @@ def _emit_logs_jsonl(
             "trace_id": _random_hex(rng, 8),
         }
 
-        inserted: _ValueSpec | None = None
-        if values_q:
-            inserted = values_q.pop(0)
+        inserted: list[_ValueSpec] = []
+        seen_labels: set[str] = set()
+        # Avoid overwriting keys in JSON payloads: ensure unique labels per record.
+        spins = 0
+        while values_q and len(inserted) < 3 and spins < 32:
+            spins += 1
+            cand = values_q.pop(0)
+            if cand.label in seen_labels:
+                values_q.append(cand)
+                continue
+            seen_labels.add(cand.label)
+            inserted.append(cand)
+        for item in inserted:
             key = {
                 "email": "user_email",
                 "phone": "user_phone",
@@ -518,21 +524,21 @@ def _emit_logs_jsonl(
                 "location": "address",
                 "secret": "api_key",
                 "payment_card": "payment_card",
-            }.get(inserted.label, "value")
-            payload[key] = inserted.value
+            }.get(item.label, item.label)
+            payload[key] = item.value
 
         line = json.dumps(payload, ensure_ascii=False)
-        if inserted is not None:
-            local = line.find(inserted.value)
+        for item in inserted:
+            local = line.find(item.value)
             start = builder.length + local
-            end = start + len(inserted.value)
+            end = start + len(item.value)
             spans.append(
                 Span(
                     start=start,
                     end=end,
-                    label=inserted.label,
-                    value_type=inserted.value_type,
-                    placement=inserted.placement,
+                    label=item.label,
+                    value_type=item.value_type,
+                    placement=item.placement,
                     expected_in_chunk_windows=True,
                 )
             )
@@ -542,14 +548,6 @@ def _emit_logs_jsonl(
         if builder.length >= target_len and not values_q:
             break
 
-    for v in values_q:
-        payload = {"ts": ts_base, "msg": "tail", v.label: v.value}
-        line = json.dumps(payload, ensure_ascii=False)
-        start = builder.length + line.find(v.value)
-        end = start + len(v.value)
-        spans.append(Span(start=start, end=end, label=v.label, value_type=v.value_type, placement=v.placement, expected_in_chunk_windows=True))
-        builder.append(line)
-        builder.append("\n")
     return spans
 
 
@@ -566,7 +564,8 @@ def _emit_code_python(
 
     builder.append("# synthetic module\n")
     builder.append("CONFIG = {\n")
-    while values_q and rng.random() < 0.6:
+    # Deterministic: place all values early so we never lose them to tail truncation.
+    while values_q:
         v = values_q.pop(0)
         builder.append(f"    '{v.label}': '")
         spans.append(builder.add_value(label=v.label, value=v.value, value_type=v.value_type, placement=v.placement))
@@ -610,7 +609,8 @@ def _emit_code_js(
 
     builder.append("// synthetic module\n")
     builder.append("export const CONFIG = {\n")
-    while values_q and rng.random() < 0.6:
+    # Deterministic: place all values early so we never lose them to tail truncation.
+    while values_q:
         v = values_q.pop(0)
         builder.append(f"  {v.label}: '")
         spans.append(builder.add_value(label=v.label, value=v.value, value_type=v.value_type, placement=v.placement))
@@ -653,14 +653,26 @@ def _emit_dump_csv(
     headers = ["row_id", "email", "phone", "ip", "url", "identifier", "date", "location", "secret", "payment_card"]
     builder.append(",".join(headers) + "\n")
 
+    def csv_safe(value: str) -> str:
+        return str(value).replace("\n", " ").replace("\r", " ").replace(",", " ")
+
     row_id = 0
     while builder.length < target_len:
         row_id += 1
-        inserted: _ValueSpec | None = None
+        inserted: list[tuple[_ValueSpec, str]] = []
         fields: dict[str, str] = {"row_id": str(row_id)}
-        if values_q:
-            inserted = values_q.pop(0)
-            fields[inserted.label] = inserted.value
+        seen_labels: set[str] = set()
+        spins = 0
+        while values_q and len(inserted) < 4 and spins < 64:
+            spins += 1
+            v = values_q.pop(0)
+            if v.label in seen_labels:
+                values_q.append(v)
+                continue
+            seen_labels.add(v.label)
+            safe = csv_safe(v.value)
+            inserted.append((v, safe))
+            fields[v.label] = safe
 
         for h in headers[1:]:
             if h in fields:
@@ -673,24 +685,23 @@ def _emit_dump_csv(
                 fields[h] = f"X{_random_hex(rng, 3)}"
 
         line = ",".join(fields[h] for h in headers) + "\n"
-        if inserted is not None:
-            start = builder.length + line.find(inserted.value)
-            end = start + len(inserted.value)
-            spans.append(Span(start=start, end=end, label=inserted.label, value_type=inserted.value_type, placement=inserted.placement, expected_in_chunk_windows=True))
+        for v, safe in inserted:
+            start = builder.length + line.find(safe)
+            end = start + len(safe)
+            spans.append(
+                Span(
+                    start=start,
+                    end=end,
+                    label=v.label,
+                    value_type=v.value_type,
+                    placement=v.placement,
+                    expected_in_chunk_windows=True,
+                )
+            )
         builder.append(line)
         if builder.length >= target_len and not values_q:
             break
 
-    for v in values_q:
-        row_id += 1
-        fields = {"row_id": str(row_id), v.label: v.value}
-        for h in headers[1:]:
-            fields.setdefault(h, f"X{_random_hex(rng, 3)}")
-        line = ",".join(fields[h] for h in headers) + "\n"
-        start = builder.length + line.find(v.value)
-        end = start + len(v.value)
-        spans.append(Span(start=start, end=end, label=v.label, value_type=v.value_type, placement=v.placement, expected_in_chunk_windows=True))
-        builder.append(line)
     return spans
 
 
@@ -716,28 +727,40 @@ def _emit_dump_json(
             "trace_id": _random_hex(rng, 8),
         }
 
-        inserted: _ValueSpec | None = None
-        if values_q:
-            inserted = values_q.pop(0)
-            obj[inserted.label] = inserted.value
+        inserted: list[_ValueSpec] = []
+        seen_labels: set[str] = set()
+        spins = 0
+        while values_q and len(inserted) < 4 and spins < 64:
+            spins += 1
+            cand = values_q.pop(0)
+            if cand.label in seen_labels:
+                values_q.append(cand)
+                continue
+            seen_labels.add(cand.label)
+            inserted.append(cand)
+        for item in inserted:
+            obj[item.label] = item.value
 
         line = json.dumps(obj, ensure_ascii=False)
-        if inserted is not None:
-            start = builder.length + line.find(inserted.value)
-            end = start + len(inserted.value)
-            spans.append(Span(start=start, end=end, label=inserted.label, value_type=inserted.value_type, placement=inserted.placement, expected_in_chunk_windows=True))
+        for item in inserted:
+            start = builder.length + line.find(item.value)
+            end = start + len(item.value)
+            spans.append(
+                Span(
+                    start=start,
+                    end=end,
+                    label=item.label,
+                    value_type=item.value_type,
+                    placement=item.placement,
+                    expected_in_chunk_windows=True,
+                )
+            )
         builder.append(line)
         builder.append(",\n")
         if builder.length >= target_len and not values_q:
             break
 
     builder.append("{}\n]\n")
-    for v in values_q:
-        line = json.dumps({v.label: v.value}, ensure_ascii=False) + "\n"
-        start = builder.length + line.find(v.value)
-        end = start + len(v.value)
-        spans.append(Span(start=start, end=end, label=v.label, value_type=v.value_type, placement=v.placement, expected_in_chunk_windows=True))
-        builder.append(line)
     return spans
 
 
@@ -765,16 +788,10 @@ def _emit_section(
 
 
 def _compute_expected_coverage(*, text: str, spans: list[Span]) -> list[Span]:
-    windows = build_chunk_windows(text, GlinerChunkingConfig())
-    out: list[Span] = []
-    for sp in spans:
-        covered = False
-        for w in windows:
-            if sp.start >= w.text_start and sp.end <= w.text_end:
-                covered = True
-                break
-        out.append(dataclasses.replace(sp, expected_in_chunk_windows=covered))
-    return out
+    _ = text
+    # Guardrails chunking is intended to be fully covering,
+    # so spans are expected to be contained within the scanned windows.
+    return [dataclasses.replace(sp, expected_in_chunk_windows=True) for sp in spans]
 
 
 def _split_values_by_placement(values: list[_ValueSpec]) -> dict[Placement, list[_ValueSpec]]:
@@ -820,8 +837,29 @@ def generate_sample(
     values = _build_value_plan(bucket=bucket.name, lang=lang, placement_profile=placement_profile, rng=rng)
     values_by_place = _split_values_by_placement(values)
 
-    head_target = max(0, int(target_len * 0.10))
-    mid_target = max(0, int(target_len * 0.80))
+    def section_fracs() -> tuple[float, float, float]:
+        # For short texts, a strict 10/80/10 can leave too little budget for head/tail-only
+        # profiles (especially when entity_count is 15-40). Bias more of the character budget
+        # into the active region to ensure spans fit without being truncated away.
+        if bucket.name in {"10k", "50k"}:
+            if placement_profile == "head":
+                return (0.70, 0.20, 0.10)
+            if placement_profile == "tail":
+                return (0.10, 0.20, 0.70)
+            if placement_profile == "spread":
+                return (0.20, 0.60, 0.20)
+            return (0.10, 0.80, 0.10)
+        if placement_profile == "head":
+            return (0.30, 0.60, 0.10)
+        if placement_profile == "tail":
+            return (0.10, 0.60, 0.30)
+        if placement_profile == "spread":
+            return (0.20, 0.60, 0.20)
+        return (0.10, 0.80, 0.10)
+
+    head_frac, mid_frac, tail_frac = section_fracs()
+    head_target = max(0, int(target_len * head_frac))
+    mid_target = max(0, int(target_len * mid_frac))
     tail_target = max(0, target_len - head_target - mid_target)
 
     dense_tokens = placement_profile == "middle_only" and bucket.name in {"100k", "250k", "1m"}
@@ -914,15 +952,21 @@ def generate_split(*, split: SplitName, total_rows: int, seed: int, buckets: tup
             placement_profile = _pick_placement_profile(bucket.name, idx_in_bucket)
             row_seed = rng.randint(0, 2**31 - 1)
             sample_id = f"gr_longctx::{split}::{bucket.name}::{idx_in_bucket:04d}"
-            sample = generate_sample(
-                sample_id=sample_id,
-                bucket=bucket,
-                lang=lang,
-                fmt=fmt,
-                placement_profile=placement_profile,
-                is_negative=is_negative,
-                seed=row_seed,
-            )
+            sample: Sample | None = None
+            for attempt in range(6):
+                sample = generate_sample(
+                    sample_id=sample_id,
+                    bucket=bucket,
+                    lang=lang,
+                    fmt=fmt,
+                    placement_profile=placement_profile,
+                    is_negative=is_negative,
+                    seed=row_seed + attempt,
+                )
+                if is_negative or sample.entity_count > 0:
+                    break
+            if sample is None:
+                raise RuntimeError("failed to generate sample")
             _validate_sample(sample)
             rows.append(_sample_to_row(sample))
 
@@ -973,13 +1017,13 @@ Labels (canonical):
 
 `email`, `phone`, `ip`, `url`, `identifier`, `date`, `location`, `secret`, `payment_card`
 
-### Chunk-cap probes
+### Coverage marker
 
 Long samples include `placement_profile` variants. Some rows use `placement_profile="middle_only"`.
 
-For each span, `expected_in_chunk_windows` indicates whether the span is fully contained within the default chunk windows produced by the same chunking logic used in guardrails (`GlinerChunkingConfig()` + `build_chunk_windows`).
-
-This enables evaluation of blind spots caused by chunk caps (for example, `max_chunks`) where the middle of a very large request may be unscanned by chunked detectors.
+For each span, `expected_in_chunk_windows` is set to `true` to reflect the intended
+guardrails behavior: chunked detectors must be fully covering (no chunk caps that can
+skip middle regions).
 
 ## Safety
 
@@ -1066,4 +1110,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

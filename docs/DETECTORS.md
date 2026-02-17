@@ -150,6 +150,9 @@ Type: `gliner`
 Source:
 - GLiNER model (`urchade/gliner_multi-v2.1`) via local runtime (`cpu`) or PyTriton (`cuda`).
 
+Policy notes:
+- Input is chunked automatically based on the model context length using tokenizer offsets (full coverage, no chunk caps).
+
 Configured query labels:
 - `person`
 - `organization`
@@ -249,6 +252,7 @@ Policy notes:
 - Recognizer is loaded only when `GR_ENABLE_NEMOTRON=true` (default is disabled).
 - Default runtime policy keeps Nemotron on structured PII labels and intentionally excludes person-name labels to prevent large false-positive spikes on public benchmarks.
 - Per-entity minimum confidence thresholds are applied in recognizer postprocessing (`entity_thresholds` / `raw_label_thresholds`).
+- Input is chunked automatically based on the model context length using tokenizer offsets (full coverage, no chunk caps).
 
 Examples:
 - `Проживает: г. Казань, ул. Пушкина 12` -> `LOCATION`

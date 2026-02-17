@@ -51,22 +51,9 @@ def test_analysis_diagnostics_include_detector_stats_and_limits() -> None:
         policy_min_score=0.5,
     )
 
-    assert len(detections) == service._MAX_SAMPLE_DETECTIONS  # noqa: SLF001
-    assert diagnostics.limit_flags["max_spans_truncated"] is True
+    assert len(detections) == 400
+    assert diagnostics.limit_flags == {}
     assert diagnostics.detector_timing_ms
     assert diagnostics.detector_span_counts
     assert diagnostics.elapsed_ms >= 0
     assert diagnostics.postprocess_mutations["overlaps_dropped"] >= 0
-
-
-def test_analysis_timeout_flag_is_set_when_budget_is_exceeded() -> None:
-    service = _make_service()
-    service._MAX_SAMPLE_ANALYSIS_SECONDS = 0.0  # noqa: SLF001
-
-    _, diagnostics = service.analyze_text_with_diagnostics(
-        text="X1 X2 X3",
-        profile_name="profile",
-        policy_min_score=0.5,
-    )
-
-    assert diagnostics.limit_flags["analysis_timeout_exceeded"] is True

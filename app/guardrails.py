@@ -4,7 +4,7 @@ import logging
 from dataclasses import dataclass
 from typing import Any
 
-from app.core.analysis.service import PresidioAnalysisService
+from app.core.analysis.service import AnalysisFailedError, PresidioAnalysisService
 from app.core.masking.reversible import ReversibleMaskingEngine
 from app.models.entities import AnalysisDiagnostics, Detection
 from app.policy import PolicyResolver
@@ -25,6 +25,13 @@ class GuardrailsBlockedError(GuardrailsError):
 
 class GuardrailsNotFoundError(GuardrailsError):
     pass
+
+
+class GuardrailsAnalysisFailedError(GuardrailsError):
+    def __init__(self, *, detector_errors: dict[str, str], diagnostics: dict[str, Any] | None = None) -> None:
+        super().__init__("analysis failed: one or more detectors errored")
+        self.detector_errors = dict(detector_errors)
+        self.diagnostics = dict(diagnostics or {})
 
 
 @dataclass(slots=True)
@@ -155,12 +162,26 @@ class GuardrailsService:
     ) -> tuple[list[Detection], dict[str, Any]]:
         analyzer = getattr(self._analysis_service, "analyze_text_with_diagnostics", None)
         if callable(analyzer):
-            detections, diagnostics = analyzer(
-                text=text,
-                profile_name=profile_name,
-                policy_min_score=policy_min_score,
-            )
-            return detections, self._serialize_diagnostics(diagnostics)
+            try:
+                detections, diagnostics = analyzer(
+                    text=text,
+                    profile_name=profile_name,
+                    policy_min_score=policy_min_score,
+                )
+                return detections, self._serialize_diagnostics(diagnostics)
+            except AnalysisFailedError as exc:
+                diagnostics = AnalysisDiagnostics(
+                    elapsed_ms=0.0,
+                    detector_timing_ms=dict(exc.detector_timing_ms),
+                    detector_span_counts=dict(exc.detector_span_counts),
+                    detector_errors=dict(exc.detector_errors),
+                    postprocess_mutations={},
+                    limit_flags={},
+                )
+                raise GuardrailsAnalysisFailedError(
+                    detector_errors=exc.detector_errors,
+                    diagnostics=self._serialize_diagnostics(diagnostics),
+                ) from exc
 
         detections = self._analysis_service.analyze_text(
             text=text,
@@ -184,7 +205,6 @@ class GuardrailsService:
                 profile_name=policy.analyzer_profile,
                 policy_min_score=policy.min_score,
             )
-            detections = ReversibleMaskingEngine.resolve_overlaps(detections)
             findings_count += len(detections)
             item_results.append(
                 ItemDetectionResult(

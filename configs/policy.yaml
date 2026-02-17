@@ -290,12 +290,6 @@ recognizer_definitions:
         - "passport number"
         - "credit card number"
         - "api key"
-      chunking:
-        enabled: true
-        max_tokens: 320
-        overlap_tokens: 64
-        max_chunks: 64
-        boundary_lookback_tokens: 24
 
   natasha_ner_ru:
     type: natasha_ner
@@ -366,9 +360,3 @@ recognizer_definitions:
       raw_label_thresholds:
         address_geolocation: 0.90
         address: 0.84
-      chunking:
-        enabled: true
-        max_tokens: 320
-        overlap_tokens: 96
-        max_chunks: 64
-        boundary_lookback_tokens: 24

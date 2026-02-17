@@ -10,8 +10,14 @@ class ReversibleMaskingEngine:
         self._placeholder_prefix = placeholder_prefix
 
     @staticmethod
-    def resolve_overlaps(detections: list[Detection]) -> list[Detection]:
-        if not detections:
+    def union_merge_spans(detections: list[Detection]) -> list[Detection]:
+        """Merge overlapping/adjacent spans into non-overlapping mask spans.
+
+        This is leak-safe: we never drop coverage, only expand by union.
+        """
+
+        items = [d for d in detections if int(d.end) > int(d.start)]
+        if not items:
             return []
 
         priority_class = {
@@ -27,25 +33,68 @@ class ReversibleMaskingEngine:
             "organization": 1,
         }
 
-        def rank(item: Detection) -> tuple[float, int, int, int]:
+        def rank(item: Detection) -> tuple[int, float, int, int]:
             canonical = str(item.metadata.get("canonical_label") or "").lower()
             return (
-                float(item.score),
                 priority_class.get(canonical, 0),
-                item.end - item.start,
-                -item.start,
+                float(item.score),
+                int(item.end - item.start),
+                -int(item.start),
             )
 
-        sorted_by_priority = sorted(detections, key=rank, reverse=True)
-        selected: list[Detection] = []
-        for candidate in sorted_by_priority:
-            if any(not (candidate.end <= item.start or candidate.start >= item.end) for item in selected):
+        items.sort(key=lambda d: (int(d.start), int(d.end)))
+        merged: list[Detection] = []
+
+        group: list[Detection] = []
+        group_start = -1
+        group_end = -1
+
+        def flush() -> None:
+            nonlocal group, group_start, group_end
+            if not group:
+                return
+            best = max(group, key=rank)
+            score = max(float(x.score) for x in group)
+            detectors = sorted({str(x.detector or "") for x in group if str(x.detector or "").strip()})
+            meta = dict(best.metadata or {})
+            meta["merged_from_detectors"] = detectors
+            merged.append(
+                Detection(
+                    start=int(group_start),
+                    end=int(group_end),
+                    text="",
+                    label=str(best.label),
+                    score=score,
+                    detector=str(best.detector),
+                    metadata=meta,
+                )
+            )
+            group = []
+            group_start = -1
+            group_end = -1
+
+        for item in items:
+            start = int(item.start)
+            end = int(item.end)
+            if not group:
+                group = [item]
+                group_start = start
+                group_end = end
                 continue
-            selected.append(candidate)
-        return sorted(selected, key=lambda item: item.start)
+            if start <= group_end:
+                group.append(item)
+                group_start = min(group_start, start)
+                group_end = max(group_end, end)
+                continue
+            flush()
+            group = [item]
+            group_start = start
+            group_end = end
+        flush()
+        return merged
 
     def mask(self, text: str, detections: list[Detection]) -> MaskingResult:
-        findings = self.resolve_overlaps([item for item in detections if item.end > item.start])
+        findings = self.union_merge_spans(detections)
         if not findings:
             return MaskingResult(text=text, placeholders={}, detections=[])
 

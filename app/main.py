@@ -13,6 +13,7 @@ from redis.asyncio import Redis
 from app.config import load_policy_config
 from app.core.analysis.service import PresidioAnalysisService
 from app.guardrails import (
+    GuardrailsAnalysisFailedError,
     GuardrailsBlockedError,
     GuardrailsError,
     GuardrailsNotFoundError,
@@ -185,6 +186,20 @@ def _missing_session_finding(session_id: str) -> Finding:
             "reason": "missing_or_expired_session",
             "session_id": session_id,
         },
+    )
+
+
+def _analysis_failed_finding(detector_errors: dict[str, str], *, output_scope: str) -> Finding:
+    evidence: dict[str, Any] = {"reason": "analysis_failed"}
+    if output_scope == "FULL":
+        evidence["detector_errors"] = dict(detector_errors)
+    return Finding(
+        check_id="analysis",
+        category="system",
+        severity="critical",
+        confidence=1.0,
+        spans=[],
+        evidence=evidence,
     )
 
 
@@ -377,9 +392,36 @@ async def apply_endpoint(request: ApplyRequest) -> ApplyResponse:
     output_items: list[OutputItem] = [OutputItem(id=item.id, text=item.text) for item in request.content]
 
     if not transforms:
-        result = await app.state.guardrails.detect_items(items=content_inputs, policy_name=policy_name)
-        findings = _findings_from_result_items(items=result.items, output_scope=request.output_scope)
-        action: ActionType = "FLAGGED" if findings else "NONE"
+        try:
+            result = await app.state.guardrails.detect_items(items=content_inputs, policy_name=policy_name)
+            findings = _findings_from_result_items(items=result.items, output_scope=request.output_scope)
+            action: ActionType = "FLAGGED" if findings else "NONE"
+        except GuardrailsAnalysisFailedError as exc:
+            findings = [_analysis_failed_finding(exc.detector_errors, output_scope=request.output_scope)]
+            _debug_apply_log(
+                stage="detect_analysis_failed",
+                request_id=request.request_id,
+                policy_id=policy_name,
+                source=request.source,
+                input_items=request.content,
+                output_items=[],
+            )
+            return ApplyResponse(
+                action="BLOCKED",
+                source=request.source,
+                policy_id=policy_name,
+                policy_version=request.policy_version,
+                outputs=[],
+                findings=findings,
+                session=None,
+                usage=UsageInfo(
+                    input_items=len(request.content),
+                    input_chars=sum(len(item.text) for item in request.content),
+                    output_items=0,
+                    output_chars=0,
+                ),
+                timings=_timings_from_elapsed_ms(started_at=started_at),
+            )
         _debug_apply_log(
             stage="detect",
             request_id=request.request_id,
@@ -413,9 +455,38 @@ async def apply_endpoint(request: ApplyRequest) -> ApplyResponse:
                 store_context=True,
                 storage_ttl_seconds=session_ttl_seconds,
             )
+        except GuardrailsAnalysisFailedError as exc:
+            findings = [_analysis_failed_finding(exc.detector_errors, output_scope=request.output_scope)]
+            _debug_apply_log(
+                stage="deidentify_analysis_failed",
+                request_id=request.request_id or session_id,
+                policy_id=policy_name,
+                source=request.source,
+                input_items=request.content,
+                output_items=[],
+            )
+            return ApplyResponse(
+                action="BLOCKED",
+                source=request.source,
+                policy_id=policy_name,
+                policy_version=request.policy_version,
+                outputs=[],
+                findings=findings,
+                session=None,
+                usage=UsageInfo(
+                    input_items=len(request.content),
+                    input_chars=sum(len(item.text) for item in request.content),
+                    output_items=0,
+                    output_chars=0,
+                ),
+                timings=_timings_from_elapsed_ms(started_at=started_at),
+            )
         except GuardrailsBlockedError:
-            detected = await app.state.guardrails.detect_items(items=content_inputs, policy_name=policy_name)
-            findings = _findings_from_result_items(items=detected.items, output_scope=request.output_scope)
+            try:
+                detected = await app.state.guardrails.detect_items(items=content_inputs, policy_name=policy_name)
+                findings = _findings_from_result_items(items=detected.items, output_scope=request.output_scope)
+            except GuardrailsAnalysisFailedError as exc:
+                findings = [_analysis_failed_finding(exc.detector_errors, output_scope=request.output_scope)]
             _debug_apply_log(
                 stage="deidentify_blocked",
                 request_id=request.request_id or session_id,
@@ -427,7 +498,7 @@ async def apply_endpoint(request: ApplyRequest) -> ApplyResponse:
             return ApplyResponse(
                 action="BLOCKED",
                 source=request.source,
-                policy_id=detected.policy_name,
+                policy_id=policy_name,
                 policy_version=request.policy_version,
                 outputs=[],
                 findings=findings,
@@ -438,7 +509,7 @@ async def apply_endpoint(request: ApplyRequest) -> ApplyResponse:
                     output_items=0,
                     output_chars=0,
                 ),
-                timings=_timings_from_result_items(started_at=started_at, items=detected.items),
+                timings=_timings_from_elapsed_ms(started_at=started_at),
             )
         except GuardrailsError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc

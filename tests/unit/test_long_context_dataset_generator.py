@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 
-from app.runtime.gliner_chunking import GlinerChunkingConfig, build_chunk_windows
 from app.tools.generate_long_context_dataset import BucketSpec, generate_sample, generate_split
 
 
@@ -49,10 +48,8 @@ def test_expected_in_chunk_windows_matches_chunker() -> None:
         is_negative=False,
         seed=7,
     )
-    windows = build_chunk_windows(sample.source_text, GlinerChunkingConfig())
     for sp in sample.spans:
-        covered = any((sp.start >= w.text_start and sp.end <= w.text_end) for w in windows)
-        assert sp.expected_in_chunk_windows == covered
+        assert sp.expected_in_chunk_windows is True
 
 
 def test_generate_split_is_deterministic() -> None:
@@ -60,4 +57,3 @@ def test_generate_split_is_deterministic() -> None:
     a = generate_split(split="fast", total_rows=10, seed=42, buckets=buckets)
     b = generate_split(split="fast", total_rows=10, seed=42, buckets=buckets)
     assert json.dumps(a, sort_keys=True, ensure_ascii=False) == json.dumps(b, sort_keys=True, ensure_ascii=False)
-

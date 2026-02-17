@@ -44,7 +44,8 @@ def test_build_token_classifier_runtime_cuda_mode(monkeypatch: pytest.MonkeyPatc
     )
 
     assert isinstance(runtime, _SentinelRuntime)
-    assert runtime.kwargs["model_name"] == "nemotron"
+    assert runtime.kwargs["triton_model_name"] == "nemotron"
+    assert runtime.kwargs["hf_model_name"] == "ignored-local-name"
     assert runtime.kwargs["pytriton_url"] == "localhost:8000"
 
 
@@ -82,7 +83,8 @@ def test_local_runtime_ensure_ready_reflects_constructor_load_failure(monkeypatc
 
 def test_pytriton_runtime_predict_requires_readiness_check() -> None:
     runtime = token_classifier_runtime.PyTritonTokenClassifierRuntime(
-        model_name="nemotron",
+        triton_model_name="nemotron",
+        hf_model_name="scanpatch/pii-ner-nemotron",
         pytriton_url="localhost:8000",
         init_timeout_s=10.0,
         infer_timeout_s=20.0,
@@ -100,7 +102,8 @@ def test_pytriton_runtime_ensure_ready_success_sets_ready(monkeypatch: pytest.Mo
 
     monkeypatch.setattr(token_classifier_runtime, "wait_for_triton_ready", fake_wait)
     runtime = token_classifier_runtime.PyTritonTokenClassifierRuntime(
-        model_name="nemotron",
+        triton_model_name="nemotron",
+        hf_model_name="scanpatch/pii-ner-nemotron",
         pytriton_url="localhost:8000",
         init_timeout_s=10.0,
         infer_timeout_s=20.0,

@@ -3,11 +3,16 @@ from __future__ import annotations
 import json
 import re
 from abc import ABC, abstractmethod
+from pathlib import Path
 from typing import Any
 
 import numpy as np
 
-from app.runtime.gliner_chunking import GlinerChunkingConfig, run_chunked_inference
+from app.runtime.tokenizer_chunking import (
+    TextChunkWindow,
+    chunk_text,
+    deterministic_overlap_tokens,
+)
 from app.runtime.triton_readiness import (
     TritonModelContract,
     TritonTensorContract,
@@ -39,14 +44,53 @@ class LocalCpuGlinerRuntime(GlinerRuntime):
         self,
         model_name: str,
         preferred_device: str = "auto",
-        chunking: GlinerChunkingConfig | None = None,
     ) -> None:
         self.device = resolve_cpu_runtime_device(preferred_device)
         self._model_name = model_name
-        self._chunking = (chunking or GlinerChunkingConfig()).normalized()
         self._model: Any | None = None
+        self._encoder_tokenizer: Any | None = None
+        self._max_input_tokens: int | None = None
+        self._overlap_tokens: int | None = None
         self._load_error: str | None = None
         self._load_model()
+
+    @staticmethod
+    def _read_gliner_config(model_source: str) -> dict[str, Any] | None:
+        try:
+            base = Path(str(model_source))
+        except Exception:
+            return None
+        if not base.exists() or not base.is_dir():
+            return None
+        cfg_path = base / "gliner_config.json"
+        if not cfg_path.exists():
+            return None
+        try:
+            return json.loads(cfg_path.read_text(encoding="utf-8"))
+        except Exception:
+            return None
+
+    @staticmethod
+    def _extract_gliner_config_from_model(model: Any) -> dict[str, Any] | None:
+        cfg = getattr(model, "config", None)
+        if isinstance(cfg, dict):
+            return dict(cfg)
+        return None
+
+    @staticmethod
+    def _derive_chunking_limits(*, gliner_cfg: dict[str, Any], encoder_tokenizer: Any) -> int:
+        raw_max_len = gliner_cfg.get("max_len")
+        try:
+            max_len = int(raw_max_len)
+        except Exception as exc:
+            raise RuntimeError("unable to determine GLiNER max_len (refuse to risk silent truncation)") from exc
+        if max_len < 2:
+            raise RuntimeError("invalid GLiNER max_len (refuse to risk silent truncation)")
+        specials = int(getattr(encoder_tokenizer, "num_special_tokens_to_add", lambda **_: 0)(pair=False))
+        cap = max_len - max(0, specials)
+        if cap < 2:
+            raise RuntimeError("invalid derived GLiNER context length")
+        return cap
 
     def _load_model(self) -> None:
         try:
@@ -60,18 +104,84 @@ class LocalCpuGlinerRuntime(GlinerRuntime):
             if hasattr(model, "to"):
                 model.to(self.device)
             self._model = model
+            # Strict chunking: derive encoder tokenizer + max_len from GLiNER config.
+            gliner_cfg = self._read_gliner_config(self._model_name) or self._extract_gliner_config_from_model(model)
+            if not isinstance(gliner_cfg, dict):
+                raise RuntimeError("unable to read GLiNER config (refuse to risk silent truncation)")
+            encoder_name = str(gliner_cfg.get("model_name") or "").strip()
+            if not encoder_name:
+                raise RuntimeError("unable to determine GLiNER encoder model_name (refuse to risk silent truncation)")
+            try:
+                from transformers import AutoTokenizer
+            except Exception as exc:
+                raise RuntimeError("transformers is required for safe chunking") from exc
+            encoder_tokenizer = AutoTokenizer.from_pretrained(encoder_name, use_fast=True)
+            max_input_tokens = self._derive_chunking_limits(gliner_cfg=gliner_cfg, encoder_tokenizer=encoder_tokenizer)
+            self._encoder_tokenizer = encoder_tokenizer
+            self._max_input_tokens = int(max_input_tokens)
+            self._overlap_tokens = deterministic_overlap_tokens(int(max_input_tokens))
         except Exception as exc:  # pragma: no cover - network/model availability dependent
             self._load_error = f"gliner model load error: {exc}"
 
+    @staticmethod
+    def _merge_window_predictions(
+        *,
+        text: str,
+        windows: list[TextChunkWindow],
+        window_predictions: list[list[dict[str, Any]]],
+        default_threshold: float,
+    ) -> list[dict[str, Any]]:
+        dedup: dict[tuple[int, int, str], dict[str, Any]] = {}
+        text_len = len(text)
+        for window, predictions in zip(windows, window_predictions, strict=False):
+            for item in predictions:
+                if not isinstance(item, dict):
+                    continue
+                local_start = int(item.get("start", -1))
+                local_end = int(item.get("end", -1))
+                if local_end <= local_start:
+                    continue
+                global_start = window.text_start + local_start
+                global_end = window.text_start + local_end
+                if global_start < 0 or global_end > text_len or global_end <= global_start:
+                    continue
+                label = str(item.get("label", "")).strip()
+                if not label:
+                    continue
+                score = float(item.get("score", default_threshold))
+                key = (global_start, global_end, label)
+                existing = dedup.get(key)
+                if existing is None or score > float(existing.get("score", 0.0)):
+                    dedup[key] = {
+                        "start": global_start,
+                        "end": global_end,
+                        "text": text[global_start:global_end],
+                        "label": label,
+                        "score": score,
+                    }
+        return sorted(dedup.values(), key=lambda item: (int(item["start"]), int(item["end"]), str(item["label"])))
+
     def predict_entities(self, text: str, labels: list[str], threshold: float) -> list[dict[str, Any]]:
-        if self._model is None:
+        if (
+            self._model is None
+            or self._encoder_tokenizer is None
+            or self._max_input_tokens is None
+            or self._overlap_tokens is None
+        ):
             raise RuntimeError(self._load_error or "gliner runtime is not ready")
-        return run_chunked_inference(
+        windows = chunk_text(
             text=text,
-            labels=labels,
-            threshold=threshold,
-            chunking=self._chunking,
-            predict_batch=self._predict_batch,
+            tokenizer=self._encoder_tokenizer,
+            max_input_tokens=self._max_input_tokens,
+            overlap_tokens=self._overlap_tokens,
+        )
+        chunk_texts = [text[w.text_start : w.text_end] for w in windows]
+        chunk_predictions = self._predict_batch(chunk_texts, labels, threshold)
+        return self._merge_window_predictions(
+            text=text,
+            windows=windows,
+            window_predictions=chunk_predictions,
+            default_threshold=threshold,
         )
 
     def ensure_ready(self, timeout_s: float) -> bool:
@@ -114,23 +224,26 @@ class LocalCpuGlinerRuntime(GlinerRuntime):
 class PyTritonGlinerRuntime(GlinerRuntime):
     def __init__(
         self,
-        model_name: str,
+        triton_model_name: str,
+        hf_model_name: str,
         pytriton_url: str,
         init_timeout_s: float,
         infer_timeout_s: float,
-        chunking: GlinerChunkingConfig | None = None,
     ) -> None:
-        self._model_name = model_name
+        self._model_name = triton_model_name
+        self._hf_model_name = hf_model_name
         self._pytriton_url = pytriton_url
         self._init_timeout_s = max(float(init_timeout_s), float(infer_timeout_s))
         self._infer_timeout_s = infer_timeout_s
-        self._chunking = (chunking or GlinerChunkingConfig()).normalized()
         self._max_batch_size_hint = 32
         self.device = "cuda"
         self._ready = False
         self._load_error: str | None = None
+        self._encoder_tokenizer: Any | None = None
+        self._max_input_tokens: int | None = None
+        self._overlap_tokens: int | None = None
         self._contract = TritonModelContract(
-            name=model_name,
+            name=triton_model_name,
             inputs=(
                 TritonTensorContract(name="text", data_type="TYPE_STRING"),
                 TritonTensorContract(name="labels_json", data_type="TYPE_STRING"),
@@ -138,6 +251,34 @@ class PyTritonGlinerRuntime(GlinerRuntime):
             ),
             outputs=(TritonTensorContract(name="detections_json", data_type="TYPE_STRING"),),
         )
+
+    def _load_tokenizer(self) -> None:
+        # Strict chunking: require gliner_config.json to be present locally (model_dir mount)
+        # or embedded in the GLiNER package config. In CUDA mode we avoid loading model weights.
+        gliner_cfg = LocalCpuGlinerRuntime._read_gliner_config(self._hf_model_name)  # noqa: SLF001
+        if not isinstance(gliner_cfg, dict):
+            self._load_error = "unable to read GLiNER config for safe chunking (refuse to risk silent truncation)"
+            return
+        encoder_name = str(gliner_cfg.get("model_name") or "").strip()
+        if not encoder_name:
+            self._load_error = "unable to determine GLiNER encoder model_name (refuse to risk silent truncation)"
+            return
+        try:
+            from transformers import AutoTokenizer
+        except Exception as exc:
+            self._load_error = f"transformers import error: {exc}"
+            return
+        try:
+            encoder_tokenizer = AutoTokenizer.from_pretrained(encoder_name, use_fast=True)
+            max_input_tokens = LocalCpuGlinerRuntime._derive_chunking_limits(  # noqa: SLF001
+                gliner_cfg=gliner_cfg,
+                encoder_tokenizer=encoder_tokenizer,
+            )
+            self._encoder_tokenizer = encoder_tokenizer
+            self._max_input_tokens = int(max_input_tokens)
+            self._overlap_tokens = deterministic_overlap_tokens(int(max_input_tokens))
+        except Exception as exc:  # pragma: no cover
+            self._load_error = f"gliner tokenizer load error: {exc}"
 
     @staticmethod
     def _extract_detection_payload(output: Any) -> str:
@@ -154,12 +295,23 @@ class PyTritonGlinerRuntime(GlinerRuntime):
     def predict_entities(self, text: str, labels: list[str], threshold: float) -> list[dict[str, Any]]:
         if not self._ready:
             raise RuntimeError(self._load_error or "pytriton gliner runtime is not ready")
-        return run_chunked_inference(
+        if self._encoder_tokenizer is None or self._max_input_tokens is None or self._overlap_tokens is None:
+            self._load_tokenizer()
+        if self._encoder_tokenizer is None or self._max_input_tokens is None or self._overlap_tokens is None:
+            raise RuntimeError(self._load_error or "pytriton gliner runtime is not ready")
+        windows = chunk_text(
             text=text,
-            labels=labels,
-            threshold=threshold,
-            chunking=self._chunking,
-            predict_batch=self._predict_batch,
+            tokenizer=self._encoder_tokenizer,
+            max_input_tokens=self._max_input_tokens,
+            overlap_tokens=self._overlap_tokens,
+        )
+        chunk_texts = [text[w.text_start : w.text_end] for w in windows]
+        chunk_predictions = self._predict_batch(chunk_texts, labels, threshold)
+        return LocalCpuGlinerRuntime._merge_window_predictions(  # noqa: SLF001
+            text=text,
+            windows=windows,
+            window_predictions=chunk_predictions,
+            default_threshold=threshold,
         )
 
     def ensure_ready(self, timeout_s: float) -> bool:
@@ -264,35 +416,22 @@ def build_gliner_runtime(
     pytriton_model_name: str,
     pytriton_init_timeout_s: float,
     pytriton_infer_timeout_s: float,
-    chunking_enabled: bool = True,
-    chunking_max_tokens: int = 320,
-    chunking_overlap_tokens: int = 64,
-    chunking_max_chunks: int = 64,
-    chunking_boundary_lookback_tokens: int = 24,
 ) -> GlinerRuntime:
     mode = runtime_mode.strip().lower()
-    chunking = GlinerChunkingConfig(
-        enabled=chunking_enabled,
-        max_tokens=chunking_max_tokens,
-        overlap_tokens=chunking_overlap_tokens,
-        max_chunks=chunking_max_chunks,
-        boundary_lookback_tokens=chunking_boundary_lookback_tokens,
-    ).normalized()
 
     if mode == "cpu":
         return LocalCpuGlinerRuntime(
             model_name=model_name,
             preferred_device=cpu_device,
-            chunking=chunking,
         )
 
     if mode == "cuda":
         return PyTritonGlinerRuntime(
-            model_name=pytriton_model_name,
+            triton_model_name=pytriton_model_name,
+            hf_model_name=model_name,
             pytriton_url=pytriton_url,
             init_timeout_s=pytriton_init_timeout_s,
             infer_timeout_s=pytriton_infer_timeout_s,
-            chunking=chunking,
         )
 
     raise ValueError("unsupported runtime mode, expected 'cpu' or 'cuda'")
