@@ -182,6 +182,35 @@ def _ensure_runtime_ready(
         raise RuntimeError(f"model runtime readiness check failed for policy '{policy_name}': {errors}")
 
 
+def _env(name: str, default: str) -> str:
+    return os.getenv(name, default)
+
+
+def _maybe_start_embedded_pytriton() -> Any | None:
+    if settings.runtime_mode != "cuda":
+        return None
+    from app.runtime.pytriton_embedded import EmbeddedPyTritonConfig, EmbeddedPyTritonManager
+
+    manager = EmbeddedPyTritonManager(
+        EmbeddedPyTritonConfig(
+            pytriton_url=settings.pytriton_url,
+            gliner_model_ref=_env("GR_PYTRITON_GLINER_MODEL_REF", "urchade/gliner_multi-v2.1"),
+            token_model_ref=_env("GR_PYTRITON_TOKEN_MODEL_REF", "scanpatch/pii-ner-nemotron"),
+            model_dir=settings.model_dir,
+            offline_mode=settings.offline_mode,
+            device=_env("GR_PYTRITON_DEVICE", "cuda"),
+            max_batch_size=int(_env("GR_PYTRITON_MAX_BATCH_SIZE", "32")),
+            enable_nemotron=settings.enable_nemotron,
+            grpc_port=int(_env("GR_PYTRITON_GRPC_PORT", "8001")),
+            metrics_port=int(_env("GR_PYTRITON_METRICS_PORT", "8002")),
+            readiness_timeout_s=settings.pytriton_init_timeout_s,
+        )
+    )
+    manager.start()
+    settings.pytriton_url = manager.client_url
+    return manager
+
+
 def main() -> int:
     args = _parse_args()
     load_env_file(args.env_file)
@@ -211,8 +240,10 @@ def main() -> int:
 
     if args.runtime is not None:
         os.environ["GR_RUNTIME_MODE"] = str(args.runtime)
+        settings.runtime_mode = str(args.runtime)  # align already-imported settings with CLI flags
     if args.cpu_device is not None:
         os.environ["GR_CPU_DEVICE"] = str(args.cpu_device)
+        settings.cpu_device = str(args.cpu_device)
 
     hf_token_env = os.getenv(args.hf_token_env)
     offline_effective = bool(args.offline) or (os.getenv("HF_HUB_OFFLINE") == "1") or (os.getenv("HF_DATASETS_OFFLINE") == "1")
@@ -232,6 +263,8 @@ def main() -> int:
         model_dir=os.getenv("GR_MODEL_DIR"),
         offline_mode=os.getenv("GR_OFFLINE_MODE", "").lower() in {"1", "true", "yes", "on"},
     )
+
+    manager = _maybe_start_embedded_pytriton()
 
     subset = SubsetSpec(raw=str(args.subset))
     sampler = SamplerSpec(
@@ -314,63 +347,77 @@ def main() -> int:
 
     # Span detection (single policy) + export EvalSpan predictions for downstream tasks.
     span_predictions_by_dataset: dict[str, dict[str, list[Any]]] | None = None
-    if "span_detection" in tasks or "mask_leakage" in tasks:
-        _ensure_runtime_ready(service=service, analyzer_profile=span_policy.analyzer_profile, policy_name=span_policy_name)
-        span_report, span_predictions_by_dataset = run_span_detection(
-            service=service,
-            analyzer_profile=span_policy.analyzer_profile,
-            min_score=float(span_policy.min_score),
-            inputs=span_inputs,
-            errors_preview_limit=int(args.errors_preview_limit),
-            progress_every_samples=int(args.progress_every_samples),
-            progress_every_seconds=float(args.progress_every_seconds),
-        )
-        report["tasks"]["span_detection"] = span_report
+    try:
+        if "span_detection" in tasks or "mask_leakage" in tasks:
+            _ensure_runtime_ready(service=service, analyzer_profile=span_policy.analyzer_profile, policy_name=span_policy_name)
+            span_report, span_predictions_by_dataset = run_span_detection(
+                service=service,
+                analyzer_profile=span_policy.analyzer_profile,
+                min_score=float(span_policy.min_score),
+                inputs=span_inputs,
+                errors_preview_limit=int(args.errors_preview_limit),
+                progress_every_samples=int(args.progress_every_samples),
+                progress_every_seconds=float(args.progress_every_seconds),
+            )
+            report["tasks"]["span_detection"] = span_report
 
-        for leak_in in leakage_inputs:
-            leak_in.predictions_by_id.update(span_predictions_by_dataset.get(leak_in.dataset_id, {}))
+            for leak_in in leakage_inputs:
+                leak_in.predictions_by_id.update(span_predictions_by_dataset.get(leak_in.dataset_id, {}))
 
-    # Policy action: run for configured policies (policy-specific analyzer profiles).
-    if "policy_action" in tasks:
-        action_policy_names = _split_list(args.action_policies)
-        inputs_by_policy: dict[str, list[PolicyActionInputs]] = {}
-        positive_action_by_policy: dict[str, str] = {}
+        # Policy action: run for configured policies (policy-specific analyzer profiles).
+        if "policy_action" in tasks:
+            action_policy_names = _split_list(args.action_policies)
+            inputs_by_policy: dict[str, list[PolicyActionInputs]] = {}
+            positive_action_by_policy: dict[str, str] = {}
 
-        for policy_name in action_policy_names:
-            if policy_name not in policy_cfg.policies:
-                raise RuntimeError(f"unknown policy for --action-policies: {policy_name}")
-            pol = policy_cfg.policies[policy_name]
-            positive_action_by_policy[policy_name] = "BLOCKED" if pol.mode == "block" else "MASKED"
+            for policy_name in action_policy_names:
+                if policy_name not in policy_cfg.policies:
+                    raise RuntimeError(f"unknown policy for --action-policies: {policy_name}")
+                pol = policy_cfg.policies[policy_name]
+                positive_action_by_policy[policy_name] = "BLOCKED" if pol.mode == "block" else "MASKED"
 
-            # Reuse span predictions if the action policy matches the span policy.
-            if span_predictions_by_dataset is not None and policy_name == span_policy_name:
-                preds = span_predictions_by_dataset
-            else:
-                _ensure_runtime_ready(service=service, analyzer_profile=pol.analyzer_profile, policy_name=policy_name)
-                preds = predict_eval_spans_for_policy(service=service, analyzer_profile=pol.analyzer_profile, min_score=float(pol.min_score))
-
-            policy_specific_inputs: list[PolicyActionInputs] = []
-            for base in policy_inputs:
-                policy_specific_inputs.append(
-                    PolicyActionInputs(
-                        dataset_id=base.dataset_id,
-                        split=base.split,
-                        samples=base.samples,
-                        predictions_by_id=preds.get(base.dataset_id, {}),
-                        scored_labels=base.scored_labels,
+                # Reuse span predictions if the action policy matches the span policy.
+                if span_predictions_by_dataset is not None and policy_name == span_policy_name:
+                    preds = span_predictions_by_dataset
+                else:
+                    _ensure_runtime_ready(service=service, analyzer_profile=pol.analyzer_profile, policy_name=policy_name)
+                    preds = predict_eval_spans_for_policy(
+                        service=service, analyzer_profile=pol.analyzer_profile, min_score=float(pol.min_score)
                     )
+
+                policy_specific_inputs: list[PolicyActionInputs] = []
+                for base in policy_inputs:
+                    policy_specific_inputs.append(
+                        PolicyActionInputs(
+                            dataset_id=base.dataset_id,
+                            split=base.split,
+                            samples=base.samples,
+                            predictions_by_id=preds.get(base.dataset_id, {}),
+                            scored_labels=base.scored_labels,
+                        )
+                    )
+                inputs_by_policy[policy_name] = policy_specific_inputs
+
+            action_report = run_policy_action(
+                inputs_by_policy=inputs_by_policy,
+                positive_action_by_policy=positive_action_by_policy,
+            )
+            report["tasks"]["policy_action"] = action_report
+
+        # Leakage: uses span predictions + deterministic masking.
+        if "mask_leakage" in tasks:
+            if span_predictions_by_dataset is None:
+                raise RuntimeError(
+                    "mask_leakage requires span predictions; include span_detection or run without task filtering"
                 )
-            inputs_by_policy[policy_name] = policy_specific_inputs
-
-        action_report = run_policy_action(inputs_by_policy=inputs_by_policy, positive_action_by_policy=positive_action_by_policy)
-        report["tasks"]["policy_action"] = action_report
-
-    # Leakage: uses span predictions + deterministic masking.
-    if "mask_leakage" in tasks:
-        if span_predictions_by_dataset is None:
-            raise RuntimeError("mask_leakage requires span predictions; include span_detection or run without task filtering")
-        leak_report = run_mask_leakage(inputs=leakage_inputs, errors_preview_limit=int(args.errors_preview_limit))
-        report["tasks"]["mask_leakage"] = leak_report
+            leak_report = run_mask_leakage(inputs=leakage_inputs, errors_preview_limit=int(args.errors_preview_limit))
+            report["tasks"]["mask_leakage"] = leak_report
+    finally:
+        if manager is not None:
+            try:
+                manager.stop()
+            except Exception:
+                pass
 
     run_id = f"evalv3_{suite_name}_{split}_{datetime.now(tz=UTC).strftime('%Y%m%dT%H%M%SZ')}"
     outputs = write_report_files(report=report, output_dir=args.output_dir, run_id=run_id)
