@@ -322,13 +322,31 @@ def main() -> int:
         service: PresidioAnalysisService,
         analyzer_profile: str,
         min_score: float,
+        progress_label: str,
+        progress_every_seconds: float,
     ) -> dict[str, dict[str, list[Any]]]:
         predictions_by_dataset: dict[str, dict[str, list[Any]]] = {}
+        total = sum(len(ds.samples) for ds in span_inputs)
+        processed = 0
+        started = time.perf_counter()
+        last_progress = started
         for ds in span_inputs:
             pred_by_id: dict[str, list[Any]] = {}
             for sample in ds.samples:
                 detections = service.analyze_text(text=sample.text, profile_name=analyzer_profile, policy_min_score=min_score)
                 pred_by_id[sample.sample_id] = as_eval_spans(detections)
+                processed += 1
+                now = time.perf_counter()
+                if progress_every_seconds and (now - last_progress) >= float(progress_every_seconds):
+                    rate = processed / max(1e-6, (now - started))
+                    eta_s = (total - processed) / max(1e-6, rate)
+                    print(
+                        f"[progress] task=policy_action_predict policy={progress_label} processed={processed}/{total} "
+                        f"rate={rate:.2f}/s eta_s={eta_s:.1f}",
+                        flush=True,
+                        file=sys.stderr,
+                    )
+                    last_progress = now
             predictions_by_dataset[ds.dataset_id] = pred_by_id
         return predictions_by_dataset
 
@@ -420,7 +438,11 @@ def main() -> int:
                 else:
                     _ensure_runtime_ready(service=service, analyzer_profile=pol.analyzer_profile, policy_name=policy_name)
                     preds = predict_eval_spans_for_policy(
-                        service=service, analyzer_profile=pol.analyzer_profile, min_score=float(pol.min_score)
+                        service=service,
+                        analyzer_profile=pol.analyzer_profile,
+                        min_score=float(pol.min_score),
+                        progress_label=str(policy_name),
+                        progress_every_seconds=float(args.progress_every_seconds),
                     )
 
                 policy_specific_inputs: list[PolicyActionInputs] = []
