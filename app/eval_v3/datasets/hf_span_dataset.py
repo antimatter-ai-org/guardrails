@@ -94,7 +94,7 @@ def load_hf_split(
     hf_id: str,
     split: str,
     cache_dir: str,
-    hf_token: str | None,
+    hf_token: str | bool | None,
 ) -> tuple[Any, str | None]:
     try:
         from datasets import load_dataset  # type: ignore
@@ -218,7 +218,7 @@ def load_hf_span_dataset(
     hf_id: str,
     split: str,
     cache_dir: str,
-    hf_token: str | None,
+    hf_token: str | bool | None,
     text_field: str,
     spans_field: str,
     label_map: dict[str, str],

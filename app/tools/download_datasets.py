@@ -32,7 +32,7 @@ def _split_list(value: str) -> list[str]:
     return [item.strip() for item in str(value).split(",") if item.strip()]
 
 
-def _best_effort_dataset_sha(dataset_id: str, hf_token: str | None) -> str | None:
+def _best_effort_dataset_sha(dataset_id: str, hf_token: str | bool | None) -> str | None:
     try:
         from huggingface_hub import HfApi  # type: ignore
     except Exception:
@@ -68,7 +68,8 @@ def main() -> int:
     if not splits:
         raise RuntimeError("--splits must be non-empty")
 
-    hf_token = os.getenv(args.hf_token_env)
+    hf_token_env = os.getenv(args.hf_token_env)
+    hf_token: str | bool | None = hf_token_env if hf_token_env else True
     out_dir = Path(args.output_dir).expanduser().resolve()
     cache_root = out_dir / "hf_cache"
     _configure_hf_cache(cache_root)
@@ -116,4 +117,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

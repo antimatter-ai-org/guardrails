@@ -99,7 +99,7 @@ def _load_samples_for_dataset(
     dataset_id: str,
     split: str,
     cache_dir: str,
-    hf_token: str | None,
+    hf_token: str | bool | None,
     subset: SubsetSpec,
     sampler: SamplerSpec,
     max_samples: int | None,
@@ -214,10 +214,11 @@ def main() -> int:
     if args.cpu_device is not None:
         os.environ["GR_CPU_DEVICE"] = str(args.cpu_device)
 
-    hf_token = os.getenv(args.hf_token_env)
-    if not hf_token and not (bool(args.offline) or (os.getenv("HF_HUB_OFFLINE") == "1") or (os.getenv("HF_DATASETS_OFFLINE") == "1")):
-        # Suite contains private datasets. If you're online, fail early instead of partially running.
-        raise RuntimeError(f"missing HuggingFace token env var: {args.hf_token_env}")
+    hf_token_env = os.getenv(args.hf_token_env)
+    offline_effective = bool(args.offline) or (os.getenv("HF_HUB_OFFLINE") == "1") or (os.getenv("HF_DATASETS_OFFLINE") == "1")
+    # If HF_TOKEN isn't set, fall back to the locally cached HF auth token (hf auth login),
+    # which is enabled by passing token=True to datasets/huggingface_hub calls.
+    hf_token: str | bool | None = hf_token_env if hf_token_env else (True if not offline_effective else None)
 
     # Policy selection for span_detection / leakage.
     policy_cfg = load_policy_config(args.policy_path)
