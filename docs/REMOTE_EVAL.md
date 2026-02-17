@@ -2,6 +2,9 @@
 
 This doc describes how to run eval v3 on remote GPU hosts via SSH or Kubernetes.
 
+For operational gotchas and copy-paste commands (including HF `fast` split balancing), see:
+- `docs/RUNBOOK_GPU_EVAL_AND_FAST_SPLITS.md`
+
 Key constraints:
 - Code sync should be lightweight: **sync only code**, never datasets/models over a slow link.
 - Remote hosts may be online or air-gapped:
