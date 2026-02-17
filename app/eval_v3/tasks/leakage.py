@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sys
 import time
 from dataclasses import dataclass
 from typing import Any
@@ -47,15 +48,20 @@ def run_mask_leakage(
     *,
     inputs: list[MaskLeakageInputs],
     errors_preview_limit: int = 25,
+    progress_every_seconds: float = 15.0,
 ) -> dict[str, Any]:
     started = time.perf_counter()
+    last_progress = started
     total_gold_spans = 0
     leaked_gold_spans = 0
     leaked_examples: list[dict[str, Any]] = []
+    processed_samples = 0
+    total_samples = sum(len(item.samples) for item in inputs)
 
     for item in inputs:
         view = filter_scored_spans(samples=item.samples, predictions_by_id=item.predictions_by_id, scored_labels=item.scored_labels)
         for sample in view.samples:
+            processed_samples += 1
             if not sample.gold_spans:
                 continue
             pred_spans = view.predictions_by_id.get(sample.sample_id, [])
@@ -85,9 +91,23 @@ def run_mask_leakage(
                             }
                         )
 
+            now = time.perf_counter()
+            if progress_every_seconds and (now - last_progress) >= float(progress_every_seconds):
+                rate = processed_samples / max(1e-6, (now - started))
+                eta_s = (total_samples - processed_samples) / max(1e-6, rate)
+                print(
+                    f"[progress] task=mask_leakage processed={processed_samples}/{total_samples} "
+                    f"rate={rate:.2f}/s eta_s={eta_s:.1f}",
+                    flush=True,
+                    file=sys.stderr,
+                )
+                last_progress = now
+
     leakage_fraction = 0.0 if total_gold_spans == 0 else leaked_gold_spans / total_gold_spans
     return {
         "elapsed_seconds": round(time.perf_counter() - started, 6),
+        "sample_count": total_samples,
+        "processed_samples": processed_samples,
         "total_gold_spans": total_gold_spans,
         "leaked_gold_spans": leaked_gold_spans,
         "leakage_fraction": round(leakage_fraction, 6),

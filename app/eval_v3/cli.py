@@ -450,7 +450,11 @@ def main() -> int:
                 raise RuntimeError(
                     "mask_leakage requires span predictions; include span_detection or run without task filtering"
                 )
-            leak_report = run_mask_leakage(inputs=leakage_inputs, errors_preview_limit=int(args.errors_preview_limit))
+            leak_report = run_mask_leakage(
+                inputs=leakage_inputs,
+                errors_preview_limit=int(args.errors_preview_limit),
+                progress_every_seconds=float(args.progress_every_seconds),
+            )
             report["tasks"]["mask_leakage"] = leak_report
             report["run"]["timing"]["mask_leakage_seconds"] = round(time.perf_counter() - leakage_started, 6)
     except BaseException as exc:
