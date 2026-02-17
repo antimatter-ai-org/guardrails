@@ -380,6 +380,7 @@ def main() -> int:
 
     # Span detection (single policy) + export EvalSpan predictions for downstream tasks.
     span_predictions_by_dataset: dict[str, dict[str, list[Any]]] | None = None
+    fatal_exc: BaseException | None = None
     try:
         if "span_detection" in tasks or "mask_leakage" in tasks:
             span_started = time.perf_counter()
@@ -452,12 +453,9 @@ def main() -> int:
             leak_report = run_mask_leakage(inputs=leakage_inputs, errors_preview_limit=int(args.errors_preview_limit))
             report["tasks"]["mask_leakage"] = leak_report
             report["run"]["timing"]["mask_leakage_seconds"] = round(time.perf_counter() - leakage_started, 6)
-    finally:
-        if manager is not None:
-            try:
-                manager.stop()
-            except Exception:
-                pass
+    except BaseException as exc:
+        # Still write a report file (best-effort) so runs are debuggable/comparable even on failures.
+        fatal_exc = exc
 
     finished_at = datetime.now(tz=UTC)
     report["run"]["finished_at_utc"] = finished_at.isoformat()
@@ -465,6 +463,17 @@ def main() -> int:
 
     outputs = write_report_files(report=report, output_dir=args.output_dir, run_id=run_id)
     print(json.dumps(outputs, ensure_ascii=False))
+
+    # Stop embedded Triton after we've written/printed the report outputs. If shutdown hangs,
+    # the run results are still recoverable from the printed paths above.
+    if manager is not None:
+        try:
+            manager.stop()
+        except Exception:
+            pass
+
+    if fatal_exc is not None:
+        raise fatal_exc
     return 0
 
 
