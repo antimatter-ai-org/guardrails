@@ -55,6 +55,7 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument("--errors-preview-limit", type=int, default=25)
     p.add_argument("--progress-every-samples", type=int, default=1000)
     p.add_argument("--progress-every-seconds", type=float, default=15.0)
+    p.add_argument("--workers", type=int, default=1, help="Span detection parallelism (ThreadPool). Default: 1.")
     return p.parse_args()
 
 
@@ -355,6 +356,7 @@ def main() -> int:
                 analyzer_profile=span_policy.analyzer_profile,
                 min_score=float(span_policy.min_score),
                 inputs=span_inputs,
+                num_workers=int(args.workers),
                 errors_preview_limit=int(args.errors_preview_limit),
                 progress_every_samples=int(args.progress_every_samples),
                 progress_every_seconds=float(args.progress_every_seconds),

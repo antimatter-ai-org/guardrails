@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 import time
 from collections import defaultdict
 from dataclasses import asdict, dataclass
@@ -113,6 +114,7 @@ def run_span_detection(
     analyzer_profile: str,
     min_score: float,
     inputs: list[SpanDetectionInputs],
+    num_workers: int = 1,
     errors_preview_limit: int = 25,
     progress_every_samples: int = 1000,
     progress_every_seconds: float = 15.0,
@@ -134,36 +136,68 @@ def run_span_detection(
         detector_predictions: dict[str, dict[str, list[EvalSpan]]] = defaultdict(dict)
 
         last_progress = time.perf_counter()
-        for idx, sample in enumerate(item.samples, start=1):
+        def _predict(sample: EvalSample) -> list[EvalSpan]:
             detections = service.analyze_text(
                 text=sample.text,
                 profile_name=analyzer_profile,
                 policy_min_score=min_score,
             )
-            spans = as_eval_spans(detections)
-            predictions_by_id[sample.sample_id] = spans
+            return as_eval_spans(detections)
 
-            for span in spans:
-                detector = span.detector or "unknown"
-                detector_predictions[detector].setdefault(sample.sample_id, []).append(span)
-                combined_detector_predictions[detector].setdefault(sample.sample_id, []).append(span)
+        # Parallelize at the sample level. This can drastically speed up GPU-backed
+        # runtimes (pytriton) by allowing concurrent in-flight requests.
+        if int(num_workers) > 1:
+            with ThreadPoolExecutor(max_workers=int(num_workers)) as ex:
+                for idx, (sample, spans) in enumerate(zip(item.samples, ex.map(_predict, item.samples)), start=1):
+                    predictions_by_id[sample.sample_id] = spans
 
-            now = time.perf_counter()
-            should_print = (idx % max(1, int(progress_every_samples)) == 0) or (
-                float(progress_every_seconds) > 0 and (now - last_progress) >= float(progress_every_seconds)
-            )
-            if should_print:
-                elapsed = now - dataset_started
-                rate = idx / elapsed if elapsed > 0 else 0.0
-                remaining = len(item.samples) - idx
-                eta_s = remaining / rate if rate > 0 else 0.0
-                print(
-                    f"[progress] task=span_detection dataset={item.dataset_id} split={item.split} "
-                    f"processed={idx}/{len(item.samples)} rate={rate:.2f}/s eta_s={eta_s:.1f}",
-                    flush=True,
-                    file=sys.stderr,
+                    for span in spans:
+                        detector = span.detector or "unknown"
+                        detector_predictions[detector].setdefault(sample.sample_id, []).append(span)
+                        combined_detector_predictions[detector].setdefault(sample.sample_id, []).append(span)
+
+                    now = time.perf_counter()
+                    should_print = (idx % max(1, int(progress_every_samples)) == 0) or (
+                        float(progress_every_seconds) > 0 and (now - last_progress) >= float(progress_every_seconds)
+                    )
+                    if should_print:
+                        elapsed = now - dataset_started
+                        rate = idx / elapsed if elapsed > 0 else 0.0
+                        remaining = len(item.samples) - idx
+                        eta_s = remaining / rate if rate > 0 else 0.0
+                        print(
+                            f"[progress] task=span_detection dataset={item.dataset_id} split={item.split} "
+                            f"processed={idx}/{len(item.samples)} rate={rate:.2f}/s eta_s={eta_s:.1f}",
+                            flush=True,
+                            file=sys.stderr,
+                        )
+                        last_progress = now
+        else:
+            for idx, sample in enumerate(item.samples, start=1):
+                spans = _predict(sample)
+                predictions_by_id[sample.sample_id] = spans
+
+                for span in spans:
+                    detector = span.detector or "unknown"
+                    detector_predictions[detector].setdefault(sample.sample_id, []).append(span)
+                    combined_detector_predictions[detector].setdefault(sample.sample_id, []).append(span)
+
+                now = time.perf_counter()
+                should_print = (idx % max(1, int(progress_every_samples)) == 0) or (
+                    float(progress_every_seconds) > 0 and (now - last_progress) >= float(progress_every_seconds)
                 )
-                last_progress = now
+                if should_print:
+                    elapsed = now - dataset_started
+                    rate = idx / elapsed if elapsed > 0 else 0.0
+                    remaining = len(item.samples) - idx
+                    eta_s = remaining / rate if rate > 0 else 0.0
+                    print(
+                        f"[progress] task=span_detection dataset={item.dataset_id} split={item.split} "
+                        f"processed={idx}/{len(item.samples)} rate={rate:.2f}/s eta_s={eta_s:.1f}",
+                        flush=True,
+                        file=sys.stderr,
+                    )
+                    last_progress = now
 
         predictions_by_dataset[item.dataset_id] = predictions_by_id
 
