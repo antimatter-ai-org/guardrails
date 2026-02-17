@@ -37,7 +37,8 @@ def _parse_args() -> argparse.Namespace:
 def _configure_hf_cache(cache_dir: str) -> str:
     cache_path = Path(cache_dir).expanduser().resolve()
     cache_path.mkdir(parents=True, exist_ok=True)
-    os.environ.setdefault("HF_HOME", str(cache_path))
+    # Do NOT set HF_HOME here: huggingface_hub resolves the auth token relative to HF_HOME.
+    # Overriding HF_HOME can make an existing `hf auth login` token undiscoverable.
     os.environ.setdefault("HUGGINGFACE_HUB_CACHE", str(cache_path / "hub"))
     os.environ.setdefault("HF_DATASETS_CACHE", str(cache_path / "datasets"))
     return str(cache_path)
@@ -234,15 +235,19 @@ def _update_derivation_stats(
 
 def main() -> int:
     args = _parse_args()
-    cache_dir = _configure_hf_cache(args.cache_dir)
     datasets, (HfApi, get_token), (CommitOperationAdd, hf_hub_download) = _ensure_deps()
-
-    plans = _default_fast_plans(args.registry_path, args.suite)
-    reg = load_eval_registry(args.registry_path)
 
     token = get_token()
     if not token:
         raise RuntimeError("No HF auth token found. Run `hf auth login` or set HF_TOKEN.")
+    # Pin token in env so subsequent cache env tweaks can't hide it.
+    os.environ.setdefault("HF_TOKEN", token)
+
+    cache_dir = _configure_hf_cache(args.cache_dir)
+
+    plans = _default_fast_plans(args.registry_path, args.suite)
+    reg = load_eval_registry(args.registry_path)
+
     api = HfApi(token=token)
 
     for plan in plans:
