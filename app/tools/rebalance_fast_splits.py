@@ -49,10 +49,10 @@ def _ensure_deps() -> tuple[Any, Any, Any]:
     except Exception as exc:  # pragma: no cover
         raise RuntimeError("datasets package is required (install with guardrails-service[eval]).") from exc
     try:
-        from huggingface_hub import CommitOperationAdd, HfApi, hf_hub_download  # type: ignore
+        from huggingface_hub import CommitOperationAdd, HfApi, get_token, hf_hub_download  # type: ignore
     except Exception as exc:  # pragma: no cover
         raise RuntimeError("huggingface_hub package is required (install with guardrails-service[eval]).") from exc
-    return datasets, HfApi, (CommitOperationAdd, hf_hub_download)
+    return datasets, (HfApi, get_token), (CommitOperationAdd, hf_hub_download)
 
 
 def _default_fast_plans(registry_path: str, suite_name: str) -> list[FastSplitPlan]:
@@ -235,12 +235,15 @@ def _update_derivation_stats(
 def main() -> int:
     args = _parse_args()
     cache_dir = _configure_hf_cache(args.cache_dir)
-    datasets, HfApi, (CommitOperationAdd, hf_hub_download) = _ensure_deps()
+    datasets, (HfApi, get_token), (CommitOperationAdd, hf_hub_download) = _ensure_deps()
 
     plans = _default_fast_plans(args.registry_path, args.suite)
     reg = load_eval_registry(args.registry_path)
 
-    api = HfApi()
+    token = get_token()
+    if not token:
+        raise RuntimeError("No HF auth token found. Run `hf auth login` or set HF_TOKEN.")
+    api = HfApi(token=token)
 
     for plan in plans:
         cfg = reg.datasets[plan.dataset_id]
@@ -317,4 +320,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-
