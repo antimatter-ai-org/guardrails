@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass
 from typing import Any
 
@@ -47,6 +48,7 @@ def run_mask_leakage(
     inputs: list[MaskLeakageInputs],
     errors_preview_limit: int = 25,
 ) -> dict[str, Any]:
+    started = time.perf_counter()
     total_gold_spans = 0
     leaked_gold_spans = 0
     leaked_examples: list[dict[str, Any]] = []
@@ -85,9 +87,9 @@ def run_mask_leakage(
 
     leakage_fraction = 0.0 if total_gold_spans == 0 else leaked_gold_spans / total_gold_spans
     return {
+        "elapsed_seconds": round(time.perf_counter() - started, 6),
         "total_gold_spans": total_gold_spans,
         "leaked_gold_spans": leaked_gold_spans,
         "leakage_fraction": round(leakage_fraction, 6),
         "leaked_examples": leaked_examples,
     }
-

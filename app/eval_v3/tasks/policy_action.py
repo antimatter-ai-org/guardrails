@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass
 from typing import Any
 
@@ -41,6 +42,7 @@ def run_policy_action(
     inputs_by_policy: dict[str, list[PolicyActionInputs]],
     positive_action_by_policy: dict[str, str] | None = None,
 ) -> dict[str, Any]:
+    started = time.perf_counter()
     policies: dict[str, Any] = {}
     total_samples = 0
     for policy_name, inputs in sorted(inputs_by_policy.items()):
@@ -52,4 +54,8 @@ def run_policy_action(
             "metrics": binary_counts_payload(counts),
         }
 
-    return {"sample_count": total_samples, "policies": policies}
+    return {
+        "elapsed_seconds": round(time.perf_counter() - started, 6),
+        "sample_count": total_samples,
+        "policies": policies,
+    }

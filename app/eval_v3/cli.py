@@ -4,6 +4,7 @@ import argparse
 import json
 import os
 import sys
+import time
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -215,10 +216,15 @@ def _maybe_start_embedded_pytriton() -> Any | None:
 def main() -> int:
     args = _parse_args()
     load_env_file(args.env_file)
+    run_id = f"evalv3_{args.suite}_{args.split or 'default'}_{datetime.now(tz=UTC).strftime('%Y%m%dT%H%M%SZ')}"
+    started_at = datetime.now(tz=UTC)
+    run_started = time.perf_counter()
 
     registry = load_eval_registry(args.registry_path)
     suite_name, dataset_ids, suite_default_split = _resolve_suite_and_datasets(registry, args.suite, args.dataset)
     split = str(args.split or suite_default_split)
+    # Now that split is resolved, make the run id stable/accurate.
+    run_id = f"evalv3_{suite_name}_{split}_{started_at.strftime('%Y%m%dT%H%M%SZ')}"
 
     tasks_raw = str(args.tasks).strip()
     if tasks_raw == "all":
@@ -282,7 +288,9 @@ def main() -> int:
     leakage_inputs: list[MaskLeakageInputs] = []
     samples_by_dataset: dict[str, list[Any]] = {}
 
+    dataset_load_started = time.perf_counter()
     for dataset_id in dataset_ids:
+        dataset_started = time.perf_counter()
         samples, span_in, pol_in, leak_in, meta = _load_samples_for_dataset(
             registry=registry,
             dataset_id=dataset_id,
@@ -293,6 +301,7 @@ def main() -> int:
             sampler=sampler,
             max_samples=args.max_samples,
         )
+        meta["load_elapsed_seconds"] = round(time.perf_counter() - dataset_started, 6)
         samples_by_dataset[dataset_id] = samples
         span_inputs.append(span_in)
         policy_inputs.append(pol_in)
@@ -303,6 +312,7 @@ def main() -> int:
             flush=True,
             file=sys.stderr,
         )
+    dataset_load_elapsed = time.perf_counter() - dataset_load_started
 
     def predict_eval_spans_for_policy(
         *,
@@ -323,6 +333,8 @@ def main() -> int:
         "report_version": REPORT_VERSION,
         "generated_at_utc": datetime.now(tz=UTC).isoformat(),
         "run": {
+            "run_id": run_id,
+            "started_at_utc": started_at.isoformat(),
             "suite": suite_name,
             "split": split,
             "datasets": dataset_ids,
@@ -339,7 +351,22 @@ def main() -> int:
                 "mode": os.getenv("GR_RUNTIME_MODE", "cpu"),
                 "cpu_device": os.getenv("GR_CPU_DEVICE", "auto"),
             },
+            "settings": {
+                "enable_nemotron": bool(settings.enable_nemotron),
+                "pytriton_url": str(settings.pytriton_url),
+            },
+            "env": {
+                # Keep this minimal: enough to reproduce runtime decisions, but avoid leaking
+                # hostnames/connection strings into committed baselines/docs.
+                "GR_RUNTIME_MODE": os.getenv("GR_RUNTIME_MODE"),
+                "GR_CPU_DEVICE": os.getenv("GR_CPU_DEVICE"),
+                "GR_ENABLE_NEMOTRON": os.getenv("GR_ENABLE_NEMOTRON"),
+                "CUDA_VISIBLE_DEVICES": os.getenv("CUDA_VISIBLE_DEVICES"),
+            },
             "dataset_load": dataset_load_meta,
+            "timing": {
+                "dataset_load_seconds": round(dataset_load_elapsed, 6),
+            },
         },
         "tasks": {},
     }
@@ -350,6 +377,7 @@ def main() -> int:
     span_predictions_by_dataset: dict[str, dict[str, list[Any]]] | None = None
     try:
         if "span_detection" in tasks or "mask_leakage" in tasks:
+            span_started = time.perf_counter()
             _ensure_runtime_ready(service=service, analyzer_profile=span_policy.analyzer_profile, policy_name=span_policy_name)
             span_report, span_predictions_by_dataset = run_span_detection(
                 service=service,
@@ -362,12 +390,14 @@ def main() -> int:
                 progress_every_seconds=float(args.progress_every_seconds),
             )
             report["tasks"]["span_detection"] = span_report
+            report["run"]["timing"]["span_detection_seconds"] = round(time.perf_counter() - span_started, 6)
 
             for leak_in in leakage_inputs:
                 leak_in.predictions_by_id.update(span_predictions_by_dataset.get(leak_in.dataset_id, {}))
 
         # Policy action: run for configured policies (policy-specific analyzer profiles).
         if "policy_action" in tasks:
+            action_started = time.perf_counter()
             action_policy_names = _split_list(args.action_policies)
             inputs_by_policy: dict[str, list[PolicyActionInputs]] = {}
             positive_action_by_policy: dict[str, str] = {}
@@ -405,15 +435,18 @@ def main() -> int:
                 positive_action_by_policy=positive_action_by_policy,
             )
             report["tasks"]["policy_action"] = action_report
+            report["run"]["timing"]["policy_action_seconds"] = round(time.perf_counter() - action_started, 6)
 
         # Leakage: uses span predictions + deterministic masking.
         if "mask_leakage" in tasks:
+            leakage_started = time.perf_counter()
             if span_predictions_by_dataset is None:
                 raise RuntimeError(
                     "mask_leakage requires span predictions; include span_detection or run without task filtering"
                 )
             leak_report = run_mask_leakage(inputs=leakage_inputs, errors_preview_limit=int(args.errors_preview_limit))
             report["tasks"]["mask_leakage"] = leak_report
+            report["run"]["timing"]["mask_leakage_seconds"] = round(time.perf_counter() - leakage_started, 6)
     finally:
         if manager is not None:
             try:
@@ -421,7 +454,10 @@ def main() -> int:
             except Exception:
                 pass
 
-    run_id = f"evalv3_{suite_name}_{split}_{datetime.now(tz=UTC).strftime('%Y%m%dT%H%M%SZ')}"
+    finished_at = datetime.now(tz=UTC)
+    report["run"]["finished_at_utc"] = finished_at.isoformat()
+    report["run"]["timing"]["wall_seconds"] = round(time.perf_counter() - run_started, 6)
+
     outputs = write_report_files(report=report, output_dir=args.output_dir, run_id=run_id)
     print(json.dumps(outputs, ensure_ascii=False))
     return 0

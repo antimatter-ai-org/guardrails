@@ -13,6 +13,8 @@ def render_report_markdown(report: dict[str, Any]) -> str:
     split = run.get("split", "unknown")
     tasks = run.get("tasks", [])
     runtime = run.get("runtime", {})
+    timing = run.get("timing", {}) if isinstance(run.get("timing"), dict) else {}
+    settings = run.get("settings", {}) if isinstance(run.get("settings"), dict) else {}
 
     lines: list[str] = [
         "# Guardrails Evaluation Report (v3)",
@@ -22,8 +24,14 @@ def render_report_markdown(report: dict[str, Any]) -> str:
         f"- Datasets: `{len(run.get('datasets', []) or [])}`",
         f"- Tasks: `{', '.join(tasks)}`",
         f"- Runtime: `{runtime.get('mode', 'cpu')}` (cpu_device=`{runtime.get('cpu_device', 'auto')}`)",
+        f"- Nemotron: `{bool(settings.get('enable_nemotron', False))}`",
         f"- Offline: `{bool(run.get('offline', False))}`",
         f"- Generated: `{report.get('generated_at_utc', '')}`",
+        f"- Wall time: `{float(timing.get('wall_seconds', 0.0) or 0.0):.2f}s` "
+        f"(load={float(timing.get('dataset_load_seconds', 0.0) or 0.0):.2f}s, "
+        f"span={float(timing.get('span_detection_seconds', 0.0) or 0.0):.2f}s, "
+        f"action={float(timing.get('policy_action_seconds', 0.0) or 0.0):.2f}s, "
+        f"leak={float(timing.get('mask_leakage_seconds', 0.0) or 0.0):.2f}s)",
         "",
     ]
 
@@ -53,6 +61,21 @@ def render_report_markdown(report: dict[str, Any]) -> str:
             ]
         )
 
+        datasets = ((span.get("metrics") or {}).get("datasets")) or []
+        if isinstance(datasets, list) and datasets:
+            lines.extend(["### Per-Dataset Runtime (span_detection)", ""])
+            lines.append("| dataset | rows | seconds | rows/s |")
+            lines.append("|---|---:|---:|---:|")
+            for item in sorted(datasets, key=lambda d: float((d or {}).get("elapsed_seconds", 0.0) or 0.0), reverse=True):
+                if not isinstance(item, dict):
+                    continue
+                ds_id = item.get("dataset_id", "")
+                rows = int(item.get("sample_count", 0) or 0)
+                sec = float(item.get("elapsed_seconds", 0.0) or 0.0)
+                rps = float(item.get("samples_per_second", 0.0) or 0.0)
+                lines.append(f"| `{ds_id}` | {rows} | {sec:.2f} | {rps:.2f} |")
+            lines.append("")
+
         macro = span.get("macro_over_labels", {})
         if isinstance(macro, dict) and macro:
             lines.extend(
@@ -70,6 +93,9 @@ def render_report_markdown(report: dict[str, Any]) -> str:
     action = (report.get("tasks") or {}).get("policy_action")
     if isinstance(action, dict):
         lines.extend(["## Policy Action", ""])
+        if "elapsed_seconds" in action:
+            lines.append(f"- Elapsed: `{float(action.get('elapsed_seconds', 0.0) or 0.0):.2f}s`")
+            lines.append("")
         policies = action.get("policies", {})
         if isinstance(policies, dict):
             for policy_name, payload in policies.items():
@@ -86,8 +112,9 @@ def render_report_markdown(report: dict[str, Any]) -> str:
     if isinstance(leakage, dict):
         lines.extend(["## Mask Leakage (Diagnostic)", ""])
         frac = float(leakage.get("leakage_fraction", 0.0) or 0.0)
+        if "elapsed_seconds" in leakage:
+            lines.append(f"- Elapsed: `{float(leakage.get('elapsed_seconds', 0.0) or 0.0):.2f}s`")
         lines.append(f"- Gold spans leaked verbatim (approx): `{_fmt_pct(frac)}`")
         lines.append("")
 
     return "\n".join(lines).rstrip() + "\n"
-
