@@ -325,7 +325,7 @@ recognizer_definitions:
     enabled: true
     params:
       model_name: "scanpatch/pii-ner-nemotron"
-      threshold: 0.40
+      threshold: 0.48
       aggregation_strategy: "simple"
       triton_model_name: "nemotron"
       labels:
@@ -371,7 +371,7 @@ recognizer_definitions:
         tin: TIN
         vehicle_number: DOCUMENT_NUMBER
       entity_thresholds:
-        LOCATION: 0.78
+        LOCATION: 0.82
         DATE_TIME: 0.78
         DOCUMENT_NUMBER: 0.80
         EMAIL_ADDRESS: 0.72
