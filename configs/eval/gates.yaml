@@ -1,0 +1,18 @@
+# Optional evaluation gates. If a gate is not present, it is not enforced.
+# Gates are applied only for full, non-sampled runs unless --enforce-gates is set.
+
+suite:
+  # headline_char_recall_min: 0.85
+  # headline_char_residual_miss_ratio_max: 0.15
+
+per_label:
+  # secret:
+  #   char_recall_min: 0.90
+  # payment_card:
+  #   char_recall_min: 0.90
+
+per_dataset:
+  # antimatter-ai/guardrails-ru-presidio-test-dataset-v1:
+  #   person:
+  #     char_recall_min: 0.80
+

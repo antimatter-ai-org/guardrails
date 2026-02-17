@@ -98,13 +98,13 @@ cp .env.eval.example .env.eval
 Run all datasets:
 
 ```bash
-uv run --extra eval python -m app.eval.run --split test --policy-path configs/policy.yaml --policy-name external_default --env-file .env.eval --output-dir reports/evaluations
+uv run --extra eval python -m app.eval.run --suite guardrails-ru --split fast --policy-path configs/policy.yaml --policy-name external_default --env-file .env.eval --output-dir reports/evaluations
 ```
 
 Run one dataset:
 
 ```bash
-uv run --extra eval python -m app.eval.run --dataset scanpatch/pii-ner-corpus-synthetic-controlled --split test --env-file .env.eval
+uv run --extra eval python -m app.eval.run --suite guardrails-ru --dataset antimatter-ai/guardrails-ru-scanpatch-pii-ner-controlled-v1 --split fast --env-file .env.eval
 ```
 
 Decision trail for major detector/evaluation changes:

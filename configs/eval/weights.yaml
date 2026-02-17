@@ -1,0 +1,16 @@
+# Default label weights for suite headline KPI.
+# Higher weight -> higher impact in risk-weighted macro metrics.
+
+weights:
+  secret: 4
+  payment_card: 4
+  identifier: 3
+  email: 3
+  phone: 3
+  person: 2
+  location: 2
+  ip: 2
+  organization: 1
+  date: 1
+  url: 1
+

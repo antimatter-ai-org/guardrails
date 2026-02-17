@@ -1,4 +1,4 @@
-.PHONY: sync deps-up deps-down dev-up dev-down run-api run-pytriton run-pytriton-debug test-unit test-integration test-all download-models check-models eval-all eval-scanpatch
+.PHONY: sync deps-up deps-down dev-up dev-down run-api run-pytriton run-pytriton-debug test-unit test-integration test-all download-models check-models eval-all eval-full eval-compare
 
 MODELS_DIR ?= ./.models
 POLICY_PATH ?= ./configs/policy.yaml
@@ -45,7 +45,11 @@ test-integration: deps-up
 test-all: test-unit test-integration
 
 eval-all:
-	uv run --extra eval python -m app.eval.run --split test --policy-path $(POLICY_PATH) --policy-name external_default --env-file $(EVAL_ENV_FILE) --output-dir $(EVAL_OUTPUT_DIR)
+	uv run --extra eval python -m app.eval.run --suite guardrails-ru --split fast --policy-path $(POLICY_PATH) --policy-name external_default --env-file $(EVAL_ENV_FILE) --output-dir $(EVAL_OUTPUT_DIR)
 
-eval-scanpatch:
-	uv run --extra eval python -m app.eval.run --dataset scanpatch/pii-ner-corpus-synthetic-controlled --split test --policy-path $(POLICY_PATH) --policy-name external_default --env-file $(EVAL_ENV_FILE) --output-dir $(EVAL_OUTPUT_DIR)
+eval-full:
+	uv run --extra eval python -m app.eval.run --suite guardrails-ru --split full --policy-path $(POLICY_PATH) --policy-name external_default --env-file $(EVAL_ENV_FILE) --output-dir $(EVAL_OUTPUT_DIR)
+
+eval-compare:
+	@test -n "$(BASE_REPORT)" || (echo "Set BASE_REPORT=/path/to/old/report.json" && exit 1)
+	uv run --extra eval python -m app.eval.run --suite guardrails-ru --split fast --compare $(BASE_REPORT) --policy-path $(POLICY_PATH) --policy-name external_default --env-file $(EVAL_ENV_FILE) --output-dir $(EVAL_OUTPUT_DIR)

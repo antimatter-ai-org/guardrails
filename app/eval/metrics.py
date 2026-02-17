@@ -92,6 +92,61 @@ def _sum_counts(items: list[MetricCounts]) -> MetricCounts:
     )
 
 
+def add_counts(a: MetricCounts, b: MetricCounts) -> MetricCounts:
+    return MetricCounts(
+        true_positives=a.true_positives + b.true_positives,
+        false_positives=a.false_positives + b.false_positives,
+        false_negatives=a.false_negatives + b.false_negatives,
+    )
+
+
+def merge_aggregates(items: list[EvaluationAggregate]) -> EvaluationAggregate:
+    if not items:
+        zero = MetricCounts(true_positives=0, false_positives=0, false_negatives=0)
+        return EvaluationAggregate(
+            exact_agnostic=zero,
+            overlap_agnostic=zero,
+            exact_canonical=zero,
+            overlap_canonical=zero,
+            char_canonical=zero,
+            token_canonical=zero,
+            per_label_exact={},
+            per_label_char={},
+        )
+
+    exact_agnostic = MetricCounts(true_positives=0, false_positives=0, false_negatives=0)
+    overlap_agnostic = MetricCounts(true_positives=0, false_positives=0, false_negatives=0)
+    exact_canonical = MetricCounts(true_positives=0, false_positives=0, false_negatives=0)
+    overlap_canonical = MetricCounts(true_positives=0, false_positives=0, false_negatives=0)
+    char_canonical = MetricCounts(true_positives=0, false_positives=0, false_negatives=0)
+    token_canonical = MetricCounts(true_positives=0, false_positives=0, false_negatives=0)
+    per_label_exact: dict[str, MetricCounts] = {}
+    per_label_char: dict[str, MetricCounts] = {}
+
+    for agg in items:
+        exact_agnostic = add_counts(exact_agnostic, agg.exact_agnostic)
+        overlap_agnostic = add_counts(overlap_agnostic, agg.overlap_agnostic)
+        exact_canonical = add_counts(exact_canonical, agg.exact_canonical)
+        overlap_canonical = add_counts(overlap_canonical, agg.overlap_canonical)
+        char_canonical = add_counts(char_canonical, agg.char_canonical)
+        token_canonical = add_counts(token_canonical, agg.token_canonical)
+        for label, counts in agg.per_label_exact.items():
+            per_label_exact[label] = add_counts(per_label_exact.get(label, MetricCounts(0, 0, 0)), counts)
+        for label, counts in agg.per_label_char.items():
+            per_label_char[label] = add_counts(per_label_char.get(label, MetricCounts(0, 0, 0)), counts)
+
+    return EvaluationAggregate(
+        exact_agnostic=exact_agnostic,
+        overlap_agnostic=overlap_agnostic,
+        exact_canonical=exact_canonical,
+        overlap_canonical=overlap_canonical,
+        char_canonical=char_canonical,
+        token_canonical=token_canonical,
+        per_label_exact=per_label_exact,
+        per_label_char=per_label_char,
+    )
+
+
 def _merge_ranges(ranges: list[tuple[int, int]]) -> list[tuple[int, int]]:
     cleaned = sorted((start, end) for start, end in ranges if end > start)
     if not cleaned:
@@ -187,6 +242,7 @@ def evaluate_samples(
     dataset_samples: list[EvalSample],
     predictions_by_id: dict[str, list[EvalSpan]],
     *,
+    allowed_labels: set[str] | None = None,
     include_overlap: bool = True,
     include_per_label: bool = True,
 ) -> EvaluationAggregate:
@@ -197,14 +253,15 @@ def evaluate_samples(
     char_canonical_items: list[MetricCounts] = []
     token_canonical_items: list[MetricCounts] = []
 
-    all_labels: set[str] = set()
-    for sample in dataset_samples:
-        for span in sample.gold_spans:
-            if span.canonical_label:
-                all_labels.add(span.canonical_label)
-        for span in predictions_by_id.get(sample.sample_id, []):
-            if span.canonical_label:
-                all_labels.add(span.canonical_label)
+    all_labels: set[str] = set(allowed_labels or [])
+    if not allowed_labels:
+        for sample in dataset_samples:
+            for span in sample.gold_spans:
+                if span.canonical_label:
+                    all_labels.add(span.canonical_label)
+            for span in predictions_by_id.get(sample.sample_id, []):
+                if span.canonical_label:
+                    all_labels.add(span.canonical_label)
 
     per_label_counts: dict[str, list[MetricCounts]] = {label: [] for label in sorted(all_labels)} if include_per_label else {}
     per_label_char_counts: dict[str, list[MetricCounts]] = (
@@ -214,6 +271,10 @@ def evaluate_samples(
     for sample in dataset_samples:
         predicted = predictions_by_id.get(sample.sample_id, [])
         gold = sample.gold_spans
+
+        if allowed_labels is not None:
+            gold = [item for item in gold if item.canonical_label in allowed_labels]
+            predicted = [item for item in predicted if item.canonical_label in allowed_labels]
 
         exact_agnostic_items.append(
             match_counts(

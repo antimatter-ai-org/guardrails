@@ -1,0 +1,150 @@
+suite_id: guardrails-ru
+default_collection: antimatter-ai/guardrails-ru
+default_split: fast
+
+# Canonical labels in-scope for suite scoring.
+scored_labels:
+  - person
+  - email
+  - phone
+  - location
+  - organization
+  - date
+  - ip
+  - identifier
+  - payment_card
+  - secret
+  - url
+
+datasets:
+  - id: antimatter-ai/guardrails-ru-russian-pii-66k-mvp-v1
+    format: privacy_mask_parquet_v1
+    text_field: source_text
+    mask_field: privacy_mask
+    annotated_labels: [person, email, phone, location, date, identifier, payment_card, secret]
+    gold_label_mapping:
+      GIVENNAME: person
+      SURNAME: person
+      TELEPHONENUM: phone
+      EMAIL: email
+      USERNAME: identifier
+      ACCOUNTNUM: identifier
+      TAXNUM: identifier
+      DATEOFBIRTH: date
+      IDCARDNUM: identifier
+      SOCIALNUM: identifier
+      PASSWORD: secret
+      CREDITCARDNUMBER: payment_card
+      DRIVERLICENSENUM: identifier
+      CITY: location
+      # Rare/edge labels in upstream that we still map conservatively when present.
+      ZIPCODE: location
+      STREET: location
+      BUILDINGNUM: location
+    slice_fields: [language, locale, split, source_dataset]
+    tags: [ru, pii, mvp]
+    notes: RU-heavy derived PII dataset (mostly positive).
+
+  - id: antimatter-ai/guardrails-ru-meddies-pii-cleaned-v1
+    format: privacy_mask_parquet_v1
+    text_field: source_text
+    mask_field: privacy_mask
+    annotated_labels: [person, email, phone, location, organization, date, identifier]
+    gold_label_mapping:
+      HUMAN_NAME: person
+      EMAIL: email
+      PHONE_NUMBER: phone
+      ADDRESS: location
+      COMPANY_NAME: organization
+      DATE: date
+      ID_NUMBER: identifier
+    slice_fields: [language, document_type, document_length, text_format, source_subset, split]
+    tags: [ru, en, pii, structured]
+    notes: RU+EN, structured-ish documents, large and diverse.
+
+  - id: antimatter-ai/guardrails-ru-scanpatch-pii-ner-controlled-v1
+    format: privacy_mask_parquet_v1
+    text_field: source_text
+    mask_field: privacy_mask
+    annotated_labels: [person, email, phone, location, organization, date, ip, identifier]
+    gold_label_mapping:
+      person: person
+      email: email
+      phone: phone
+      location: location
+      organization: organization
+      date: date
+      ip: ip
+      identifier: identifier
+    slice_fields: [language, script_profile, lang_bucket, source_split, source, noisy, entity_count, split]
+    tags: [ru, stress, network, negative]
+    notes: Stress dataset with negatives and overlap/nesting quirks.
+
+  - id: antimatter-ai/guardrails-ru-rubai-ner-150k-personal-ru-v1
+    format: privacy_mask_parquet_v1
+    text_field: source_text
+    mask_field: privacy_mask
+    annotated_labels: [person, phone, date, identifier, location, payment_card]
+    gold_label_mapping:
+      person: person
+      phone: phone
+      date: date
+      identifier: identifier
+      location: location
+      payment_card: payment_card
+    slice_fields: [language, script_profile, alignment_mode, source_domain, entity_count, split]
+    tags: [ru, pii]
+    notes: RU-only subset from Rubai, skewed to location/payment_card.
+
+  - id: antimatter-ai/guardrails-ru-kaggle-pii-data-detection-sample-v1
+    format: privacy_mask_parquet_v1
+    text_field: source_text
+    mask_field: privacy_mask
+    annotated_labels: [person, email, phone, location, identifier, url]
+    gold_label_mapping:
+      person: person
+      email: email
+      phone: phone
+      location: location
+      identifier: identifier
+      url: url
+    slice_fields: [language, script_profile, entity_count, split]
+    tags: [en, pii, url]
+    notes: EN essay-like text; very positive.
+
+  - id: antimatter-ai/guardrails-ru-hf-pii-sample-en-v1
+    format: privacy_mask_parquet_v1
+    text_field: source_text
+    mask_field: privacy_mask
+    annotated_labels: [person, email, phone, location, date, identifier, payment_card, secret]
+    gold_label_mapping:
+      person: person
+      email: email
+      phone: phone
+      location: location
+      date: date
+      identifier: identifier
+      payment_card: payment_card
+      secret: secret
+    slice_fields: [language, script_profile, entity_count, source_locale, split]
+    tags: [en, pii, secrets, negative]
+    notes: EN-only with better negatives and secret-ish labels.
+
+  - id: antimatter-ai/guardrails-ru-presidio-test-dataset-v1
+    format: privacy_mask_parquet_v1
+    text_field: source_text
+    mask_field: privacy_mask
+    annotated_labels: [person, email, phone, location, date, payment_card, ip, url]
+    gold_label_mapping:
+      person: person
+      email: email
+      phone: phone
+      location: location
+      date: date
+      payment_card: payment_card
+      ip: ip
+      url: url
+    slice_fields: [language, script_profile, entity_count, split]
+    tags: [ru, en, pii, network]
+    notes: Presidio-placeholder aligned; RU-heavy; no negatives.
+
