@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import ipaddress
+import os
+import sysconfig
 from dataclasses import dataclass
 from typing import Any
 
@@ -34,6 +36,20 @@ def _is_loopback_host(host: str) -> bool:
         return False
 
 
+def _ensure_libpython_on_ld_library_path() -> None:
+    # Triton's python backend stub needs to dlopen libpythonX.Y.so at runtime.
+    # When using uv-managed Python, the shared library lives under sysconfig LIBDIR
+    # and may not be in the system dynamic loader search path.
+    libdir = sysconfig.get_config_var("LIBDIR")
+    if not libdir:
+        return
+    current = os.environ.get("LD_LIBRARY_PATH", "")
+    parts = [item for item in current.split(":") if item]
+    if str(libdir) in parts:
+        return
+    os.environ["LD_LIBRARY_PATH"] = ":".join([str(libdir)] + parts)
+
+
 class EmbeddedPyTritonManager:
     def __init__(self, config: EmbeddedPyTritonConfig) -> None:
         self._config = config
@@ -49,6 +65,8 @@ class EmbeddedPyTritonManager:
     def start(self) -> None:
         if self._triton is not None and self._ready:
             return
+
+        _ensure_libpython_on_ld_library_path()
 
         try:
             host, http_port = parse_pytriton_url(self._config.pytriton_url)
