@@ -54,6 +54,20 @@ def _sum_simple_int_maps(a: dict[str, Any], b: dict[str, Any]) -> dict[str, int]
     return dict(sorted(out.items()))
 
 
+def _sum_nested_int_maps(
+    a: dict[str, Any], b: dict[str, Any]
+) -> dict[str, dict[str, int]]:
+    """
+    Merge maps like {dataset_id: {label: count}} by summing per (dataset_id,label).
+    """
+    out: dict[str, dict[str, int]] = {}
+    for dataset_id in set(a.keys()) | set(b.keys()):
+        da = dict(a.get(dataset_id) or {})
+        db = dict(b.get(dataset_id) or {})
+        out[str(dataset_id)] = _sum_simple_int_maps(da, db)
+    return dict(sorted(out.items()))
+
+
 def _merge_per_label_metric_payloads(a: dict[str, Any], b: dict[str, Any]) -> dict[str, Any]:
     out: dict[str, Any] = {}
     for label in set(a.keys()) | set(b.keys()):
@@ -144,7 +158,7 @@ def _merge_span_detection_task(a: dict[str, Any], b: dict[str, Any]) -> dict[str
     out["detector_breakdown"] = _merge_detector_breakdown(
         dict(a.get("detector_breakdown", {})), dict(b.get("detector_breakdown", {}))
     )
-    out["unscored_predictions"] = _sum_simple_int_maps(
+    out["unscored_predictions"] = _sum_nested_int_maps(
         dict(a.get("unscored_predictions", {})), dict(b.get("unscored_predictions", {}))
     )
     return out
@@ -153,7 +167,7 @@ def _merge_span_detection_task(a: dict[str, Any], b: dict[str, Any]) -> dict[str
 def _merge_policy_action_task(a: dict[str, Any], b: dict[str, Any]) -> dict[str, Any]:
     out: dict[str, Any] = {}
     out["elapsed_seconds"] = round(float(a.get("elapsed_seconds", 0.0)) + float(b.get("elapsed_seconds", 0.0)), 6)
-    out["sample_count"] = max(int(a.get("sample_count", 0)), int(b.get("sample_count", 0)))
+    out["sample_count"] = int(a.get("sample_count", 0)) + int(b.get("sample_count", 0))
 
     policies: dict[str, Any] = {}
     pa = dict(a.get("policies", {}) or {})
@@ -279,4 +293,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

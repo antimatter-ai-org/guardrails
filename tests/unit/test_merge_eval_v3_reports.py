@@ -75,6 +75,8 @@ def _minimal_report(*, run_id: str, datasets: list[str], tp: int) -> dict:
 def test_merge_reports_sums_counts_and_unions_datasets() -> None:
     a = _minimal_report(run_id="a", datasets=["d1"], tp=2)
     b = _minimal_report(run_id="b", datasets=["d2"], tp=3)
+    a["tasks"]["span_detection"]["unscored_predictions"] = {"d1": {"person": 1}}
+    b["tasks"]["span_detection"]["unscored_predictions"] = {"d2": {"person": 2, "email": 1}}
     merged = merge_reports([a, b])
 
     assert merged["run"]["datasets"] == ["d1", "d2"]
@@ -82,4 +84,7 @@ def test_merge_reports_sums_counts_and_unions_datasets() -> None:
     assert span["char_canonical"]["true_positives"] == 5
     assert merged["tasks"]["policy_action"]["policies"]["external_default"]["metrics"]["tp"] == 5
     assert merged["tasks"]["mask_leakage"]["total_gold_spans"] == 5
-
+    assert merged["tasks"]["span_detection"]["unscored_predictions"] == {
+        "d1": {"person": 1},
+        "d2": {"email": 1, "person": 2},
+    }
