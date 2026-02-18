@@ -80,6 +80,9 @@ class LocalCpuTokenClassifierRuntime(TokenClassifierRuntime):
             pipeline_device = torch.device(self.device)
 
         try:
+            from app.runtime.mistral_regex_fix import maybe_fix_mistral_regex_in_tokenizer_dir
+
+            maybe_fix_mistral_regex_in_tokenizer_dir(self._model_name)
             try:
                 tokenizer = AutoTokenizer.from_pretrained(self._model_name, use_fast=True, fix_mistral_regex=True)
             except TypeError:
@@ -267,6 +270,9 @@ class PyTritonTokenClassifierRuntime(TokenClassifierRuntime):
             self._load_error = f"transformers import error: {exc}"
             return
         try:
+            from app.runtime.mistral_regex_fix import maybe_fix_mistral_regex_in_tokenizer_dir
+
+            maybe_fix_mistral_regex_in_tokenizer_dir(self._hf_model_name)
             try:
                 tokenizer = AutoTokenizer.from_pretrained(self._hf_model_name, use_fast=True, fix_mistral_regex=True)
             except TypeError:

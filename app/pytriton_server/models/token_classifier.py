@@ -49,6 +49,9 @@ class TokenClassifierTritonModel:
         else:
             pipeline_device = torch.device(self._device)
 
+        from app.runtime.mistral_regex_fix import maybe_fix_mistral_regex_in_tokenizer_dir
+
+        maybe_fix_mistral_regex_in_tokenizer_dir(self._hf_model_name)
         try:
             tokenizer = AutoTokenizer.from_pretrained(self._hf_model_name, use_fast=True, fix_mistral_regex=True)
         except TypeError:
