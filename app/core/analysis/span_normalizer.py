@@ -70,6 +70,10 @@ _CANONICAL_OVERLAP_PRIORITY = {
     "location": 80,
 }
 
+_GAP_BRIDGE_CANONICALS = {"person", "organization", "location"}
+_MAX_GAP_BRIDGE_CHARS = 4
+_GAP_BRIDGE_CHARS = set(" \t\r\n-.,'\"`/:;()[]{}<>")
+
 
 @dataclass(slots=True)
 class NormalizationStats:
@@ -309,9 +313,21 @@ def _union_merge_spans(*, text: str, detections: list[Detection]) -> tuple[list[
     group: list[Detection] = []
     group_start = -1
     group_end = -1
+    group_canonicals: set[str] = set()
+
+    def canonical(item: Detection) -> str:
+        meta = item.metadata or {}
+        return str(meta.get("canonical_label") or "").lower().strip()
+
+    def gap_is_bridgeable(*, gap_text: str) -> bool:
+        if not gap_text:
+            return False
+        if len(gap_text) > _MAX_GAP_BRIDGE_CHARS:
+            return False
+        return all(ch in _GAP_BRIDGE_CHARS for ch in gap_text)
 
     def flush() -> None:
-        nonlocal merges_performed, group, group_start, group_end
+        nonlocal merges_performed, group, group_start, group_end, group_canonicals
         if not group:
             return
         best = max(group, key=rank)
@@ -338,24 +354,47 @@ def _union_merge_spans(*, text: str, detections: list[Detection]) -> tuple[list[
         group = []
         group_start = -1
         group_end = -1
+        group_canonicals = set()
 
     for item in items:
         start = int(item.start)
         end = int(item.end)
+        item_canonical = canonical(item)
         if not group:
             group = [item]
             group_start = start
             group_end = end
+            if item_canonical:
+                group_canonicals = {item_canonical}
             continue
         if start <= group_end:  # overlap or adjacency
             group.append(item)
             group_end = max(group_end, end)
             group_start = min(group_start, start)
+            if item_canonical:
+                group_canonicals.add(item_canonical)
             continue
+
+        gap = text[int(group_end) : int(start)]
+        if (
+            item_canonical
+            and item_canonical in _GAP_BRIDGE_CANONICALS
+            and item_canonical in group_canonicals
+            and gap_is_bridgeable(gap_text=gap)
+        ):
+            # Bridge small delimiter gaps (spaces/punct) for the same canonical class to avoid
+            # fragmented names/orgs/locations hurting char-level recall.
+            group.append(item)
+            group_end = max(group_end, end)
+            group_start = min(group_start, start)
+            group_canonicals.add(item_canonical)
+            continue
+
         flush()
         group = [item]
         group_start = start
         group_end = end
+        group_canonicals = {item_canonical} if item_canonical else set()
 
     flush()
     return merged, merges_performed

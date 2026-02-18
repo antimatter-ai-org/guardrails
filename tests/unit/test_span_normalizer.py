@@ -171,3 +171,67 @@ def test_overlap_payment_card_kept_when_luhn_signal_present() -> None:
     out = normalize_detections(text=text, detections=detections)
     assert len(out) == 1
     assert out[0].metadata["canonical_label"] == "payment_card"
+
+
+def test_union_merge_bridges_small_delimiter_gap_for_same_canonical_label() -> None:
+    text = "Иванов, Иван пришел."
+    last_start = text.index("Иванов")
+    last_end = last_start + len("Иванов")
+    first_start = text.index("Иван", last_end)
+    first_end = first_start + len("Иван")
+    detections = [
+        Detection(
+            start=last_start,
+            end=last_end,
+            text=text[last_start:last_end],
+            label="PERSON",
+            score=0.8,
+            detector="nemotron",
+            metadata={"canonical_label": "person"},
+        ),
+        Detection(
+            start=first_start,
+            end=first_end,
+            text=text[first_start:first_end],
+            label="PERSON",
+            score=0.81,
+            detector="nemotron",
+            metadata={"canonical_label": "person"},
+        ),
+    ]
+
+    out = normalize_detections(text=text, detections=detections)
+    assert len(out) == 1
+    assert out[0].metadata["canonical_label"] == "person"
+    assert out[0].text == "Иванов, Иван"
+
+
+def test_union_merge_does_not_bridge_gap_across_different_canonical_labels() -> None:
+    text = "Иванов, Ромашка"
+    a_start = text.index("Иванов")
+    a_end = a_start + len("Иванов")
+    b_start = text.index("Ромашка")
+    b_end = b_start + len("Ромашка")
+    detections = [
+        Detection(
+            start=a_start,
+            end=a_end,
+            text=text[a_start:a_end],
+            label="PERSON",
+            score=0.9,
+            detector="nemotron",
+            metadata={"canonical_label": "person"},
+        ),
+        Detection(
+            start=b_start,
+            end=b_end,
+            text=text[b_start:b_end],
+            label="ORGANIZATION",
+            score=0.9,
+            detector="nemotron",
+            metadata={"canonical_label": "organization"},
+        ),
+    ]
+
+    out = normalize_detections(text=text, detections=detections)
+    assert len(out) == 2
