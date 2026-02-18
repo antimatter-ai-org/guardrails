@@ -25,7 +25,7 @@ policies:
   external_nemotron_only:
     mode: mask
     analyzer_profile: external_nemotron_only
-    min_score: 0.55
+    min_score: 0.40
     storage_ttl_seconds: 3600
     placeholder_prefix: "GR"
 
@@ -454,7 +454,7 @@ recognizer_definitions:
         IP_ADDRESS: 0.85
         PHONE_NUMBER: 0.78
         TIN: 0.88
-        PERSON: 0.60
+        PERSON: 0.55
         ORGANIZATION: 0.55
       raw_label_thresholds:
         address_geolocation: 0.90
