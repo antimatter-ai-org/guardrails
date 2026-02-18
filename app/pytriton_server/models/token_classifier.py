@@ -52,10 +52,7 @@ class TokenClassifierTritonModel:
         from app.runtime.mistral_regex_fix import maybe_fix_mistral_regex_in_tokenizer_dir
 
         maybe_fix_mistral_regex_in_tokenizer_dir(self._hf_model_name)
-        try:
-            tokenizer = AutoTokenizer.from_pretrained(self._hf_model_name, use_fast=True, fix_mistral_regex=True)
-        except TypeError:
-            tokenizer = AutoTokenizer.from_pretrained(self._hf_model_name, use_fast=True)
+        tokenizer = AutoTokenizer.from_pretrained(self._hf_model_name, use_fast=True)
         model = AutoModelForTokenClassification.from_pretrained(self._hf_model_name)
         # Strict chunking: refuse to run without a fast tokenizer (offsets required).
         if not bool(getattr(tokenizer, "is_fast", False)):

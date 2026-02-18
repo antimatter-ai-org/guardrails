@@ -83,10 +83,7 @@ class LocalCpuTokenClassifierRuntime(TokenClassifierRuntime):
             from app.runtime.mistral_regex_fix import maybe_fix_mistral_regex_in_tokenizer_dir
 
             maybe_fix_mistral_regex_in_tokenizer_dir(self._model_name)
-            try:
-                tokenizer = AutoTokenizer.from_pretrained(self._model_name, use_fast=True, fix_mistral_regex=True)
-            except TypeError:
-                tokenizer = AutoTokenizer.from_pretrained(self._model_name, use_fast=True)
+            tokenizer = AutoTokenizer.from_pretrained(self._model_name, use_fast=True)
             model = AutoModelForTokenClassification.from_pretrained(self._model_name)
             max_input_tokens = effective_max_tokens_for_token_classifier(model=model, tokenizer=tokenizer)
             self._pipeline = pipeline(
@@ -273,10 +270,7 @@ class PyTritonTokenClassifierRuntime(TokenClassifierRuntime):
             from app.runtime.mistral_regex_fix import maybe_fix_mistral_regex_in_tokenizer_dir
 
             maybe_fix_mistral_regex_in_tokenizer_dir(self._hf_model_name)
-            try:
-                tokenizer = AutoTokenizer.from_pretrained(self._hf_model_name, use_fast=True, fix_mistral_regex=True)
-            except TypeError:
-                tokenizer = AutoTokenizer.from_pretrained(self._hf_model_name, use_fast=True)
+            tokenizer = AutoTokenizer.from_pretrained(self._hf_model_name, use_fast=True)
             model = AutoModelForTokenClassification.from_pretrained(self._hf_model_name)
             max_input_tokens = effective_max_tokens_for_token_classifier(model=model, tokenizer=tokenizer)
             self._tokenizer = tokenizer

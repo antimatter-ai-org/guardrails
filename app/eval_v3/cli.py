@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import sys
@@ -188,6 +189,38 @@ def _env(name: str, default: str) -> str:
     return os.getenv(name, default)
 
 
+def _stable_run_tag(
+    *,
+    suite_name: str,
+    split: str,
+    dataset_ids: list[str],
+    policy_name: str,
+    tasks: list[str],
+    runtime: str,
+) -> str:
+    """
+    Deterministic tag to avoid parallel run_dir collisions (e.g., concurrent GPU5/GPU6 evals).
+    """
+
+    payload = {
+        "suite": str(suite_name),
+        "split": str(split),
+        "datasets": sorted(dataset_ids),
+        "policy_name": str(policy_name),
+        "tasks": list(tasks),
+        "runtime": str(runtime),
+        "enable_gliner": bool(settings.enable_gliner),
+        "enable_nemotron": bool(settings.enable_nemotron),
+        # In practice, split-runs also pin different GPUs and different embedded Triton ports.
+        "cuda_visible_devices": os.getenv("CUDA_VISIBLE_DEVICES"),
+        "pytriton_url": os.getenv("GR_PYTRITON_URL"),
+        "pytriton_grpc_port": os.getenv("GR_PYTRITON_GRPC_PORT"),
+        "pytriton_metrics_port": os.getenv("GR_PYTRITON_METRICS_PORT"),
+    }
+    blob = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha1(blob).hexdigest()[:10]
+
+
 def _maybe_start_embedded_pytriton() -> Any | None:
     if settings.runtime_mode != "cuda":
         return None
@@ -219,15 +252,12 @@ def _maybe_start_embedded_pytriton() -> Any | None:
 def main() -> int:
     args = _parse_args()
     load_env_file(args.env_file)
-    run_id = f"evalv3_{args.suite}_{args.split or 'default'}_{datetime.now(tz=UTC).strftime('%Y%m%dT%H%M%SZ')}"
     started_at = datetime.now(tz=UTC)
     run_started = time.perf_counter()
 
     registry = load_eval_registry(args.registry_path)
     suite_name, dataset_ids, suite_default_split = _resolve_suite_and_datasets(registry, args.suite, args.dataset)
     split = str(args.split or suite_default_split)
-    # Now that split is resolved, make the run id stable/accurate.
-    run_id = f"evalv3_{suite_name}_{split}_{started_at.strftime('%Y%m%dT%H%M%SZ')}"
 
     tasks_raw = str(args.tasks).strip()
     if tasks_raw == "all":
@@ -255,15 +285,27 @@ def main() -> int:
         os.environ["GR_CPU_DEVICE"] = str(args.cpu_device)
         settings.cpu_device = str(args.cpu_device)
 
+    # Policy selection for span_detection / leakage.
+    policy_cfg = load_policy_config(args.policy_path)
+    span_policy_name = args.policy_name or policy_cfg.default_policy
+
+    # Now that split/runtime/policy are resolved, make the run id stable + collision-resistant.
+    run_tag = _stable_run_tag(
+        suite_name=suite_name,
+        split=split,
+        dataset_ids=dataset_ids,
+        policy_name=span_policy_name,
+        tasks=tasks,
+        runtime=str(settings.runtime_mode),
+    )
+    run_id = f"evalv3_{suite_name}_{split}_{started_at.strftime('%Y%m%dT%H%M%SZ')}_{run_tag}"
+
     hf_token_env = os.getenv(args.hf_token_env)
     offline_effective = bool(args.offline) or (os.getenv("HF_HUB_OFFLINE") == "1") or (os.getenv("HF_DATASETS_OFFLINE") == "1")
     # If HF_TOKEN isn't set, fall back to the locally cached HF auth token (hf auth login),
     # which is enabled by passing token=True to datasets/huggingface_hub calls.
     hf_token: str | bool | None = hf_token_env if hf_token_env else (True if not offline_effective else None)
 
-    # Policy selection for span_detection / leakage.
-    policy_cfg = load_policy_config(args.policy_path)
-    span_policy_name = args.policy_name or policy_cfg.default_policy
     if span_policy_name not in policy_cfg.policies:
         raise RuntimeError(f"unknown policy '{span_policy_name}'")
     span_policy = policy_cfg.policies[span_policy_name]
