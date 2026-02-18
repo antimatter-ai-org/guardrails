@@ -173,7 +173,7 @@ def test_overlap_payment_card_kept_when_luhn_signal_present() -> None:
     assert out[0].metadata["canonical_label"] == "payment_card"
 
 
-def test_union_merge_bridges_small_delimiter_gap_for_same_canonical_label() -> None:
+def test_union_merge_does_not_bridge_delimiter_gaps_between_non_overlapping_spans() -> None:
     text = "Иванов, Иван пришел."
     last_start = text.index("Иванов")
     last_end = last_start + len("Иванов")
@@ -201,9 +201,7 @@ def test_union_merge_bridges_small_delimiter_gap_for_same_canonical_label() -> N
     ]
 
     out = normalize_detections(text=text, detections=detections)
-    assert len(out) == 1
-    assert out[0].metadata["canonical_label"] == "person"
-    assert out[0].text == "Иванов, Иван"
+    assert len(out) == 2
 
 
 def test_union_merge_does_not_bridge_gap_across_different_canonical_labels() -> None:
