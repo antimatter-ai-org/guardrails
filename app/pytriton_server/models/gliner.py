@@ -122,6 +122,20 @@ class GlinerTritonModel:
             cfg = getattr(self._model, "config", None)
             if isinstance(cfg, dict):
                 gliner_cfg = dict(cfg)
+            elif hasattr(cfg, "to_dict"):
+                try:
+                    gliner_cfg = dict(cfg.to_dict())
+                except Exception:
+                    gliner_cfg = None
+            elif hasattr(cfg, "__dict__"):
+                try:
+                    gliner_cfg = dict(getattr(cfg, "__dict__"))
+                except Exception:
+                    gliner_cfg = None
+        if gliner_cfg is None:
+            cfg_dict = getattr(self._model, "config_dict", None)
+            if isinstance(cfg_dict, dict):
+                gliner_cfg = dict(cfg_dict)
 
         if not isinstance(gliner_cfg, dict):
             raise RuntimeError("unable to read GLiNER config for safe chunking (refuse to risk silent truncation)")

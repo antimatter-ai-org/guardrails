@@ -64,7 +64,16 @@ class LocalCpuGlinerRuntime(GlinerRuntime):
         except Exception:
             return None
         if not base.exists() or not base.is_dir():
-            return None
+            # Try to fetch config from the Hub when a local dir is not provided.
+            try:
+                from huggingface_hub import hf_hub_download  # type: ignore
+            except Exception:
+                return None
+            try:
+                cfg_path = hf_hub_download(repo_id=str(model_source), filename="gliner_config.json")
+                return json.loads(Path(cfg_path).read_text(encoding="utf-8"))
+            except Exception:
+                return None
         cfg_path = base / "gliner_config.json"
         if not cfg_path.exists():
             return None
@@ -78,6 +87,16 @@ class LocalCpuGlinerRuntime(GlinerRuntime):
         cfg = getattr(model, "config", None)
         if isinstance(cfg, dict):
             return dict(cfg)
+        if hasattr(cfg, "to_dict"):
+            try:
+                return dict(cfg.to_dict())
+            except Exception:
+                return None
+        if hasattr(cfg, "__dict__"):
+            try:
+                return dict(getattr(cfg, "__dict__"))
+            except Exception:
+                return None
         return None
 
     @staticmethod

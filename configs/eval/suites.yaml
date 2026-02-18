@@ -20,13 +20,13 @@ suites:
       - antimatter-ai/guardrails-ru-kaggle-pii-data-detection-sample-v1
       - antimatter-ai/guardrails-ru-hf-pii-sample-en-v1
       - antimatter-ai/guardrails-ru-presidio-test-dataset-v1
-      - antimatter-ai/guardrails-long-context-pii-synth-v1
+      - antimatter-ai/guardrails-long-context-pii-concat-v1
 
   guardrails_long_context:
     title: Guardrails Long Context
     default_split: fast
     datasets:
-      - antimatter-ai/guardrails-long-context-pii-synth-v1
+      - antimatter-ai/guardrails-long-context-pii-concat-v1
 
 datasets:
   antimatter-ai/guardrails-ru-russian-pii-66k-mvp-v1:
@@ -117,11 +117,29 @@ datasets:
     label_map: {}
     slice_fields: [language, script_profile, entity_count]
 
-  antimatter-ai/guardrails-long-context-pii-synth-v1:
-    hf_id: antimatter-ai/guardrails-long-context-pii-synth-v1
+  antimatter-ai/guardrails-long-context-pii-concat-v1:
+    hf_id: antimatter-ai/guardrails-long-context-pii-concat-v1
     kind: hf_span_v1
     text_field: source_text
     spans_field: privacy_mask
-    scored_labels: [email, phone, ip, url, identifier, date, location, secret, payment_card]
+    scored_labels: [person, email, phone, ip, url, identifier, date, location, secret, payment_card, organization]
     label_map: {}
-    slice_fields: [language, script_profile, format, length_bucket, placement_profile, entity_count, length_chars]
+    slice_fields: [language, script_profile, format, length_bucket, placement_profile, entity_count, length_chars, source, source_datasets]
+
+  local/guardrails-long-pad-short-v1:
+    hf_id: .tmp/datasets/guardrails-long-pad-short-v1
+    kind: hf_span_v1
+    text_field: source_text
+    spans_field: privacy_mask
+    scored_labels: [person, email, phone, ip, url, identifier, date, location, secret, payment_card, organization]
+    label_map: {}
+    slice_fields: [language, script_profile, format, length_bucket, placement_profile, entity_count, length_chars, source, source_datasets]
+
+  local/guardrails-long-concat-short-v1:
+    hf_id: .tmp/datasets/guardrails-long-concat-short-v1
+    kind: hf_span_v1
+    text_field: source_text
+    spans_field: privacy_mask
+    scored_labels: [person, email, phone, ip, url, identifier, date, location, secret, payment_card, organization]
+    label_map: {}
+    slice_fields: [language, script_profile, format, length_bucket, placement_profile, entity_count, length_chars, source, source_datasets]

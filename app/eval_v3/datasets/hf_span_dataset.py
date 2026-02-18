@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 from app.eval.types import EvalSample, EvalSpan
@@ -97,9 +98,21 @@ def load_hf_split(
     hf_token: str | bool | None,
 ) -> tuple[Any, str | None]:
     try:
-        from datasets import load_dataset  # type: ignore
+        from datasets import load_dataset, load_from_disk  # type: ignore
     except Exception as exc:
         raise RuntimeError("datasets package is required. Install with guardrails-service[eval].") from exc
+
+    # Support local datasets saved via `DatasetDict.save_to_disk`.
+    path = Path(str(hf_id)).expanduser()
+    if path.exists():
+        marker_files = ("dataset_dict.json", "state.json", "dataset_info.json")
+        if any((path / name).exists() for name in marker_files):
+            ds = load_from_disk(str(path))
+            # Handle DatasetDict or Dataset
+            if hasattr(ds, "keys") and split in getattr(ds, "keys")():
+                ds = ds[split]
+            fingerprint = str(getattr(ds, "_fingerprint", "")) or None
+            return ds, fingerprint
 
     ds = load_dataset(
         hf_id,

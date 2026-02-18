@@ -74,6 +74,10 @@ For very large request performance testing, use the `guardrails_long_context` su
 uv run --extra eval python -m app.eval_v3.cli --suite guardrails_long_context --split fast --env-file .env.eval
 ```
 
+Notes:
+- The suite targets `antimatter-ai/guardrails-long-context-pii-concat-v1` (concatenated real-labeled segments, long-context).
+- The dataset is intentionally small to keep long-context checks fast; overall quality is tracked with the full short-form suites.
+
 ## Tasks
 
 The eval runner is task-based. Default `--tasks all` runs:
