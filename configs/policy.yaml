@@ -447,15 +447,15 @@ recognizer_definitions:
         nickname: PERSON
         organization: ORGANIZATION
       entity_thresholds:
-        LOCATION: 0.78
-        DATE_TIME: 0.78
-        DOCUMENT_NUMBER: 0.80
+        LOCATION: 0.72
+        DATE_TIME: 0.70
+        DOCUMENT_NUMBER: 0.72
         EMAIL_ADDRESS: 0.72
         IP_ADDRESS: 0.85
         PHONE_NUMBER: 0.78
-        TIN: 0.88
-        PERSON: 0.55
-        ORGANIZATION: 0.55
+        TIN: 0.82
+        PERSON: 0.45
+        ORGANIZATION: 0.60
       raw_label_thresholds:
         address_geolocation: 0.90
         address: 0.84
