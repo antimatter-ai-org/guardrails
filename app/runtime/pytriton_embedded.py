@@ -14,6 +14,7 @@ from app.runtime.triton_readiness import contract_from_binding, parse_pytriton_u
 @dataclass(slots=True)
 class EmbeddedPyTritonConfig:
     pytriton_url: str
+    enable_gliner: bool
     gliner_model_ref: str
     token_model_ref: str
     model_dir: str | None
@@ -23,7 +24,9 @@ class EmbeddedPyTritonConfig:
     enable_nemotron: bool
     grpc_port: int = 8001
     metrics_port: int = 8002
-    readiness_timeout_s: float = 120.0
+    # Deprecated: kept for backward compatibility as a per-HTTP socket timeout only.
+    # Readiness itself is not subject to a global deadline.
+    readiness_timeout_s: float | None = None
 
 
 def _is_loopback_host(host: str) -> bool:
@@ -66,6 +69,14 @@ class EmbeddedPyTritonManager:
         if self._triton is not None and self._ready:
             return
 
+        # If no ML models are enabled, skip starting embedded Triton entirely.
+        # The service can still run regex/phone/ip detectors safely.
+        if not bool(self._config.enable_gliner) and not bool(self._config.enable_nemotron):
+            self._triton = None
+            self._ready = True
+            self._last_error = None
+            return
+
         _ensure_libpython_on_ld_library_path()
 
         try:
@@ -86,11 +97,13 @@ class EmbeddedPyTritonManager:
         self._triton = None
 
         apply_model_env(model_dir=self._config.model_dir, offline_mode=self._config.offline_mode)
-        gliner_source = resolve_gliner_model_source(
-            model_name=self._config.gliner_model_ref,
-            model_dir=self._config.model_dir,
-            strict=self._config.offline_mode,
-        )
+        gliner_source = ""
+        if self._config.enable_gliner:
+            gliner_source = resolve_gliner_model_source(
+                model_name=self._config.gliner_model_ref,
+                model_dir=self._config.model_dir,
+                strict=self._config.offline_mode,
+            )
         token_source = ""
         if self._config.enable_nemotron:
             token_source = resolve_token_classifier_model_source(
@@ -104,6 +117,7 @@ class EmbeddedPyTritonManager:
             token_classifier_model_ref=token_source,
             device=self._config.device,
             max_batch_size=self._config.max_batch_size,
+            enable_gliner=self._config.enable_gliner,
             enable_nemotron=self._config.enable_nemotron,
         )
         contracts = [contract_from_binding(binding) for binding in bindings]

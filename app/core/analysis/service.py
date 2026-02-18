@@ -16,10 +16,27 @@ from app.models.entities import AnalysisDiagnostics, Detection
 logger = logging.getLogger(__name__)
 
 
+class AnalysisFailedError(RuntimeError):
+    """Raised when one or more recognizers fail during analysis.
+
+    This is treated as a fail-closed condition by the API layer: we never return
+    partially-masked or partially-scanned output text.
+    """
+
+    def __init__(
+        self,
+        *,
+        detector_errors: dict[str, str],
+        detector_timing_ms: dict[str, float] | None = None,
+        detector_span_counts: dict[str, int] | None = None,
+    ) -> None:
+        super().__init__("analysis failed: one or more detectors errored")
+        self.detector_errors = dict(detector_errors)
+        self.detector_timing_ms = dict(detector_timing_ms or {})
+        self.detector_span_counts = dict(detector_span_counts or {})
+
+
 class PresidioAnalysisService:
-    _MAX_SAMPLE_ANALYSIS_SECONDS = 5.0
-    _MAX_SAMPLE_DETECTIONS = 256
-    _MAX_RAW_RECOGNIZER_RESULTS = 1024
     _PAYMENT_CARD_CONTEXT_MARKERS = (
         "card",
         "credit",
@@ -57,9 +74,13 @@ class PresidioAnalysisService:
             return registry
         raise KeyError(f"analyzer profile registry not initialized: {profile_name}")
 
-    def ensure_profile_runtimes_ready(self, *, profile_names: list[str], timeout_s: float) -> dict[str, str]:
+    def ensure_profile_runtimes_ready(
+        self,
+        *,
+        profile_names: list[str],
+        timeout_s: float | None,
+    ) -> dict[str, str]:
         errors: dict[str, str] = {}
-        readiness_timeout = max(0.0, float(timeout_s))
         for profile_name in profile_names:
             registry = self._get_registry(profile_name)
             for recognizer in registry.recognizers:
@@ -70,7 +91,7 @@ class PresidioAnalysisService:
                 runtime_key = f"{profile_name}:{recognizer_name}"
                 try:
                     if hasattr(runtime, "ensure_ready"):
-                        ready = bool(runtime.ensure_ready(timeout_s=readiness_timeout))
+                        ready = bool(runtime.ensure_ready(timeout_s=timeout_s))
                     elif hasattr(runtime, "is_ready"):
                         ready = bool(runtime.is_ready())
                     else:
@@ -97,20 +118,14 @@ class PresidioAnalysisService:
         self,
         profile_name: str,
         text: str,
-        *,
-        deadline: float,
-    ) -> tuple[list[RecognizerResult], dict[str, float], dict[str, int], dict[str, str], bool]:
+    ) -> tuple[list[RecognizerResult], dict[str, float], dict[str, int], dict[str, str]]:
         registry = self._get_registry(profile_name)
         raw_results: list[RecognizerResult] = []
         detector_timing_ms: dict[str, float] = {}
         detector_span_counts: dict[str, int] = {}
         detector_errors: dict[str, str] = {}
-        timeout_exceeded = False
 
         for recognizer in registry.recognizers:
-            if perf_counter() >= deadline:
-                timeout_exceeded = True
-                break
             entities = recognizer.get_supported_entities()
             recognizer_name = str(getattr(recognizer, "name", recognizer.__class__.__name__))
             started_at = perf_counter()
@@ -124,18 +139,12 @@ class PresidioAnalysisService:
             detector_timing_ms[recognizer_name] = detector_timing_ms.get(recognizer_name, 0.0) + elapsed_ms
             detector_span_counts[recognizer_name] = detector_span_counts.get(recognizer_name, 0) + len(recognized)
             raw_results.extend(recognized)
-            if perf_counter() >= deadline:
-                timeout_exceeded = True
-                break
-            if len(raw_results) >= self._MAX_RAW_RECOGNIZER_RESULTS:
-                break
 
         return (
             EntityRecognizer.remove_duplicates(raw_results),
             detector_timing_ms,
             detector_span_counts,
             detector_errors,
-            timeout_exceeded,
         )
 
     @staticmethod
@@ -232,20 +241,16 @@ class PresidioAnalysisService:
         policy_min_score: float,
     ) -> tuple[list[Detection], AnalysisDiagnostics]:
         started_at = perf_counter()
-        deadline = started_at + self._MAX_SAMPLE_ANALYSIS_SECONDS
         detector_timing_ms: dict[str, float] = {}
         detector_span_counts: dict[str, int] = {}
         detector_errors: dict[str, str] = {}
-        timeout_exceeded = False
-        spans_truncated = False
 
         (
             results,
             detector_timing_ms,
             detector_span_counts,
             detector_errors,
-            timeout_exceeded,
-        ) = self._analyze_with_registry(profile_name, text, deadline=deadline)
+        ) = self._analyze_with_registry(profile_name, text)
 
         detections: list[Detection] = []
         for result in results:
@@ -293,13 +298,6 @@ class PresidioAnalysisService:
             detections=detections,
             return_stats=True,
         )
-        if len(detections) > self._MAX_SAMPLE_DETECTIONS:
-            spans_truncated = True
-            detections = sorted(
-                detections,
-                key=lambda item: (-float(item.score), item.start, -(item.end - item.start)),
-            )[: self._MAX_SAMPLE_DETECTIONS]
-            detections = sorted(detections, key=lambda item: item.start)
 
         diagnostics = AnalysisDiagnostics(
             elapsed_ms=(perf_counter() - started_at) * 1000.0,
@@ -307,9 +305,14 @@ class PresidioAnalysisService:
             detector_span_counts=dict(detector_span_counts),
             detector_errors=dict(detector_errors),
             postprocess_mutations=dict(postprocess_stats),
-            limit_flags={
-                "analysis_timeout_exceeded": bool(timeout_exceeded),
-                "max_spans_truncated": bool(spans_truncated),
-            },
+            # Intentionally empty: analysis must fully scan without time/span caps.
+            limit_flags={},
         )
+
+        if detector_errors:
+            raise AnalysisFailedError(
+                detector_errors=detector_errors,
+                detector_timing_ms=diagnostics.detector_timing_ms,
+                detector_span_counts=diagnostics.detector_span_counts,
+            )
         return detections, diagnostics

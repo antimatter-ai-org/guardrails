@@ -12,7 +12,6 @@ from random import Random
 from typing import Any, Literal
 
 from app.eval.script_profile import classify_script_profile
-from app.runtime.gliner_chunking import GlinerChunkingConfig, build_chunk_windows
 
 
 SplitName = Literal["fast", "full"]
@@ -789,16 +788,10 @@ def _emit_section(
 
 
 def _compute_expected_coverage(*, text: str, spans: list[Span]) -> list[Span]:
-    windows = build_chunk_windows(text, GlinerChunkingConfig())
-    out: list[Span] = []
-    for sp in spans:
-        covered = False
-        for w in windows:
-            if sp.start >= w.text_start and sp.end <= w.text_end:
-                covered = True
-                break
-        out.append(dataclasses.replace(sp, expected_in_chunk_windows=covered))
-    return out
+    _ = text
+    # Guardrails chunking is intended to be fully covering,
+    # so spans are expected to be contained within the scanned windows.
+    return [dataclasses.replace(sp, expected_in_chunk_windows=True) for sp in spans]
 
 
 def _split_values_by_placement(values: list[_ValueSpec]) -> dict[Placement, list[_ValueSpec]]:
@@ -1024,13 +1017,13 @@ Labels (canonical):
 
 `email`, `phone`, `ip`, `url`, `identifier`, `date`, `location`, `secret`, `payment_card`
 
-### Chunk-cap probes
+### Coverage marker
 
 Long samples include `placement_profile` variants. Some rows use `placement_profile="middle_only"`.
 
-For each span, `expected_in_chunk_windows` indicates whether the span is fully contained within the default chunk windows produced by the same chunking logic used in guardrails (`GlinerChunkingConfig()` + `build_chunk_windows`).
-
-This enables evaluation of blind spots caused by chunk caps (for example, `max_chunks`) where the middle of a very large request may be unscanned by chunked detectors.
+For each span, `expected_in_chunk_windows` is set to `true` to reflect the intended
+guardrails behavior: chunked detectors must be fully covering (no chunk caps that can
+skip middle regions).
 
 ## Safety
 

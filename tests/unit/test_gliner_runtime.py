@@ -46,7 +46,8 @@ def test_build_gliner_runtime_cuda_mode(monkeypatch: pytest.MonkeyPatch) -> None
     )
 
     assert isinstance(runtime, _SentinelRuntime)
-    assert runtime.kwargs["model_name"] == "gliner"
+    assert runtime.kwargs["triton_model_name"] == "gliner"
+    assert runtime.kwargs["hf_model_name"] == "unused-hf-name"
     assert runtime.kwargs["pytriton_url"] == "pytriton"
 
 
@@ -90,7 +91,8 @@ def test_pytriton_runtime_chunks_requests_to_max_batch_size(monkeypatch: pytest.
     monkeypatch.setitem(sys.modules, "pytriton.client", fake_client_module)
 
     runtime = gliner_runtime.PyTritonGlinerRuntime(
-        model_name="gliner",
+        triton_model_name="gliner",
+        hf_model_name="urchade/gliner_multi-v2.1",
         pytriton_url="localhost:8000",
         init_timeout_s=10.0,
         infer_timeout_s=20.0,
@@ -131,7 +133,8 @@ def test_pytriton_runtime_adapts_when_server_requires_smaller_batch(monkeypatch:
     monkeypatch.setitem(sys.modules, "pytriton.client", fake_client_module)
 
     runtime = gliner_runtime.PyTritonGlinerRuntime(
-        model_name="gliner",
+        triton_model_name="gliner",
+        hf_model_name="urchade/gliner_multi-v2.1",
         pytriton_url="localhost:8000",
         init_timeout_s=10.0,
         infer_timeout_s=20.0,
@@ -171,7 +174,8 @@ def test_local_cpu_runtime_ensure_ready_is_ready_after_constructor_load(monkeypa
 
 def test_pytriton_runtime_predict_requires_readiness_check() -> None:
     runtime = gliner_runtime.PyTritonGlinerRuntime(
-        model_name="gliner",
+        triton_model_name="gliner",
+        hf_model_name="urchade/gliner_multi-v2.1",
         pytriton_url="localhost:8000",
         init_timeout_s=10.0,
         infer_timeout_s=20.0,
@@ -189,7 +193,8 @@ def test_pytriton_runtime_ensure_ready_success_sets_ready(monkeypatch: pytest.Mo
 
     monkeypatch.setattr(gliner_runtime, "wait_for_triton_ready", fake_wait)
     runtime = gliner_runtime.PyTritonGlinerRuntime(
-        model_name="gliner",
+        triton_model_name="gliner",
+        hf_model_name="urchade/gliner_multi-v2.1",
         pytriton_url="localhost:8000",
         init_timeout_s=10.0,
         infer_timeout_s=20.0,

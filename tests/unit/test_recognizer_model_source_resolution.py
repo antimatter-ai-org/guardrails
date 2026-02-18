@@ -19,6 +19,7 @@ def test_gliner_builder_uses_resolved_model_source(monkeypatch) -> None:
 
     monkeypatch.setattr(recognizers.settings, "model_dir", "/models")
     monkeypatch.setattr(recognizers.settings, "offline_mode", True)
+    monkeypatch.setattr(recognizers.settings, "enable_gliner", True)
     monkeypatch.setattr(recognizers, "resolve_gliner_model_source", fake_resolve)
     monkeypatch.setattr(recognizers, "GlinerPresidioRecognizer", fake_recognizer)
 
@@ -33,6 +34,16 @@ def test_gliner_builder_uses_resolved_model_source(monkeypatch) -> None:
     assert captured["resolve_model_dir"] == "/models"
     assert captured["resolve_strict"] is True
     assert captured["recognizer_model_name"] == "/models/gliner/local"
+
+
+def test_gliner_builder_respects_global_enable_knob(monkeypatch) -> None:
+    definition = RecognizerDefinition(
+        type="gliner",
+        enabled=True,
+        params={"model_name": "urchade/gliner_multi-v2.1", "labels": ["person"]},
+    )
+    monkeypatch.setattr(recognizers.settings, "enable_gliner", False)
+    assert recognizers._build_gliner_recognizers("gliner", definition) == []  # noqa: SLF001
 
 
 def test_token_classifier_builder_uses_resolved_model_source(monkeypatch) -> None:

@@ -239,6 +239,10 @@ def run_span_detection(
                 "dataset_slices": {
                     "language": _slice_metrics(samples=view.samples, predictions_by_id=view.predictions_by_id, key="language"),
                     "script_profile": _slice_metrics(samples=view.samples, predictions_by_id=view.predictions_by_id, key="script_profile"),
+                    # Long-context diagnostics (when present in dataset metadata).
+                    "format": _slice_metrics(samples=view.samples, predictions_by_id=view.predictions_by_id, key="format"),
+                    "length_bucket": _slice_metrics(samples=view.samples, predictions_by_id=view.predictions_by_id, key="length_bucket"),
+                    "placement_profile": _slice_metrics(samples=view.samples, predictions_by_id=view.predictions_by_id, key="placement_profile"),
                     "noisy": _slice_metrics(samples=view.samples, predictions_by_id=view.predictions_by_id, key="noisy"),
                     "source": _slice_metrics(samples=view.samples, predictions_by_id=view.predictions_by_id, key="source"),
                     "entity_count": _slice_metrics(samples=view.samples, predictions_by_id=view.predictions_by_id, key="entity_count"),
@@ -289,6 +293,9 @@ def run_span_detection(
         "dataset_slices": {
             "language": _slice_metrics(samples=combined_samples, predictions_by_id=combined_predictions, key="language"),
             "script_profile": _slice_metrics(samples=combined_samples, predictions_by_id=combined_predictions, key="script_profile"),
+            "format": _slice_metrics(samples=combined_samples, predictions_by_id=combined_predictions, key="format"),
+            "length_bucket": _slice_metrics(samples=combined_samples, predictions_by_id=combined_predictions, key="length_bucket"),
+            "placement_profile": _slice_metrics(samples=combined_samples, predictions_by_id=combined_predictions, key="placement_profile"),
             "noisy": _slice_metrics(samples=combined_samples, predictions_by_id=combined_predictions, key="noisy"),
             "source": _slice_metrics(samples=combined_samples, predictions_by_id=combined_predictions, key="source"),
             "entity_count": _slice_metrics(samples=combined_samples, predictions_by_id=combined_predictions, key="entity_count"),

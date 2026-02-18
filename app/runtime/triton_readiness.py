@@ -167,48 +167,66 @@ def wait_for_triton_ready(
     *,
     pytriton_url: str,
     contracts: list[TritonModelContract],
-    timeout_s: float,
+    timeout_s: float | None,
     poll_interval_s: float = 0.5,
 ) -> None:
     host, port = parse_pytriton_url(pytriton_url)
     base_url = f"http://{host}:{port}"
-    deadline = time.monotonic() + max(0.1, float(timeout_s))
+    # IMPORTANT: do not impose a global readiness wall-clock cap. Readiness is a
+    # startup concern; request handling fails closed immediately when models are
+    # not ready, but the process should not "give up" based on elapsed time.
+    http_timeout_s = 2.0
+    if timeout_s is not None:
+        # Backward-compatible knob: per-request socket timeout only (not a global deadline).
+        try:
+            http_timeout_s = max(0.1, float(timeout_s))
+        except Exception:
+            http_timeout_s = 2.0
     last_error = "unknown startup error"
 
-    while time.monotonic() < deadline:
-        remaining = max(0.1, deadline - time.monotonic())
-        live_status, _ = _http_get(base_url, "/v2/health/live", remaining)
+    while True:
+        try:
+            live_status, _ = _http_get(base_url, "/v2/health/live", http_timeout_s)
+        except Exception as exc:
+            last_error = f"Triton live probe failed: {exc}"
+            time.sleep(poll_interval_s)
+            continue
         if live_status != 200:
             last_error = f"Triton live probe returned HTTP {live_status}"
-            time.sleep(min(poll_interval_s, remaining))
+            time.sleep(poll_interval_s)
             continue
-        ready_status, _ = _http_get(base_url, "/v2/health/ready", remaining)
+        try:
+            ready_status, _ = _http_get(base_url, "/v2/health/ready", http_timeout_s)
+        except Exception as exc:
+            last_error = f"Triton ready probe failed: {exc}"
+            time.sleep(poll_interval_s)
+            continue
         if ready_status != 200:
             last_error = f"Triton ready probe returned HTTP {ready_status}"
-            time.sleep(min(poll_interval_s, remaining))
+            time.sleep(poll_interval_s)
             continue
 
         model_error: str | None = None
         for contract in contracts:
             safe_name = urllib.parse.quote(contract.name, safe="")
-            model_ready_status, _ = _http_get(base_url, f"/v2/models/{safe_name}/ready", remaining)
+            try:
+                model_ready_status, _ = _http_get(base_url, f"/v2/models/{safe_name}/ready", http_timeout_s)
+            except Exception as exc:
+                model_error = f"model {contract.name!r} ready probe failed: {exc}"
+                break
             if model_ready_status != 200:
                 model_error = f"model {contract.name!r} ready probe returned HTTP {model_ready_status}"
                 break
             try:
-                config = _fetch_model_config(base_url, contract.name, remaining)
+                config = _fetch_model_config(base_url, contract.name, http_timeout_s)
             except Exception as exc:
                 model_error = str(exc)
                 break
             validation_error = _validate_contract(config, contract)
             if validation_error is not None:
-                model_error = f"model {contract.name!r} contract validation failed: {validation_error}"
-                break
+                # Deterministic misconfiguration: fail fast rather than polling forever.
+                raise RuntimeError(f"model {contract.name!r} contract validation failed: {validation_error}")
         if model_error is None:
             return
         last_error = model_error
-        time.sleep(min(poll_interval_s, remaining))
-
-    raise RuntimeError(
-        f"Triton readiness check timed out after {timeout_s:.1f}s at {host}:{port}: {last_error}"
-    )
+        time.sleep(poll_interval_s)

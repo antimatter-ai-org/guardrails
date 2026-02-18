@@ -7,7 +7,12 @@ from typing import Any
 
 import numpy as np
 
-from app.runtime.gliner_chunking import GlinerChunkingConfig, run_chunked_inference
+from app.runtime.tokenizer_chunking import (
+    TextChunkWindow,
+    chunk_text,
+    deterministic_overlap_tokens,
+    effective_max_tokens_for_token_classifier,
+)
 from app.runtime.triton_readiness import (
     TritonModelContract,
     TritonTensorContract,
@@ -22,7 +27,7 @@ class TokenClassifierRuntime(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def ensure_ready(self, timeout_s: float) -> bool:
+    def ensure_ready(self, timeout_s: float | None) -> bool:
         raise NotImplementedError
 
     @abstractmethod
@@ -49,12 +54,14 @@ class LocalCpuTokenClassifierRuntime(TokenClassifierRuntime):
         model_name: str,
         preferred_device: str = "auto",
         aggregation_strategy: str = "simple",
-        chunking: GlinerChunkingConfig | None = None,
     ) -> None:
         self.device = resolve_cpu_runtime_device(preferred_device)
         self._model_name = model_name
         self._aggregation_strategy = aggregation_strategy
-        self._chunking = (chunking or GlinerChunkingConfig()).normalized()
+        self._tokenizer: Any | None = None
+        self._model: Any | None = None
+        self._max_input_tokens: int | None = None
+        self._overlap_tokens: int | None = None
         self._pipeline: Any | None = None
         self._load_error: str | None = None
         self._load_model()
@@ -73,8 +80,12 @@ class LocalCpuTokenClassifierRuntime(TokenClassifierRuntime):
             pipeline_device = torch.device(self.device)
 
         try:
-            tokenizer = AutoTokenizer.from_pretrained(self._model_name)
+            from app.runtime.mistral_regex_fix import maybe_fix_mistral_regex_in_tokenizer_dir
+
+            maybe_fix_mistral_regex_in_tokenizer_dir(self._model_name)
+            tokenizer = AutoTokenizer.from_pretrained(self._model_name, use_fast=True)
             model = AutoModelForTokenClassification.from_pretrained(self._model_name)
+            max_input_tokens = effective_max_tokens_for_token_classifier(model=model, tokenizer=tokenizer)
             self._pipeline = pipeline(
                 task="token-classification",
                 model=model,
@@ -82,6 +93,10 @@ class LocalCpuTokenClassifierRuntime(TokenClassifierRuntime):
                 aggregation_strategy=self._aggregation_strategy,
                 device=pipeline_device,
             )
+            self._tokenizer = tokenizer
+            self._model = model
+            self._max_input_tokens = int(max_input_tokens)
+            self._overlap_tokens = deterministic_overlap_tokens(int(max_input_tokens))
         except Exception as exc:  # pragma: no cover - model availability dependent
             self._load_error = f"token-classifier load error: {exc}"
 
@@ -144,18 +159,63 @@ class LocalCpuTokenClassifierRuntime(TokenClassifierRuntime):
             output.append(sample_results)
         return output
 
+    @staticmethod
+    def _merge_window_predictions(
+        *,
+        text: str,
+        windows: Sequence[TextChunkWindow],
+        window_predictions: Sequence[Sequence[dict[str, Any]]],
+        default_threshold: float,
+    ) -> list[dict[str, Any]]:
+        dedup: dict[tuple[int, int, str], dict[str, Any]] = {}
+        text_len = len(text)
+        for window, predictions in zip(windows, window_predictions, strict=False):
+            for item in predictions:
+                if not isinstance(item, dict):
+                    continue
+                local_start = int(item.get("start", -1))
+                local_end = int(item.get("end", -1))
+                if local_end <= local_start:
+                    continue
+                global_start = window.text_start + local_start
+                global_end = window.text_start + local_end
+                if global_start < 0 or global_end > text_len or global_end <= global_start:
+                    continue
+                label = str(item.get("label", "")).strip()
+                if not label:
+                    continue
+                score = float(item.get("score", default_threshold))
+                key = (global_start, global_end, label)
+                existing = dedup.get(key)
+                if existing is None or score > float(existing.get("score", 0.0)):
+                    dedup[key] = {
+                        "start": global_start,
+                        "end": global_end,
+                        "text": text[global_start:global_end],
+                        "label": label,
+                        "score": score,
+                    }
+        return sorted(dedup.values(), key=lambda item: (int(item["start"]), int(item["end"]), str(item["label"])))
+
     def predict_entities(self, text: str, labels: list[str], threshold: float) -> list[dict[str, Any]]:
-        if self._pipeline is None:
+        if self._pipeline is None or self._tokenizer is None or self._max_input_tokens is None or self._overlap_tokens is None:
             raise RuntimeError(self._load_error or "token-classifier runtime is not ready")
-        return run_chunked_inference(
+        windows = chunk_text(
             text=text,
-            labels=labels,
-            threshold=threshold,
-            chunking=self._chunking,
-            predict_batch=self._predict_batch,
+            tokenizer=self._tokenizer,
+            max_input_tokens=self._max_input_tokens,
+            overlap_tokens=self._overlap_tokens,
+        )
+        chunk_texts = [text[w.text_start : w.text_end] for w in windows]
+        chunk_predictions = self._predict_batch(chunk_texts, labels, threshold)
+        return self._merge_window_predictions(
+            text=text,
+            windows=windows,
+            window_predictions=chunk_predictions,
+            default_threshold=threshold,
         )
 
-    def ensure_ready(self, timeout_s: float) -> bool:
+    def ensure_ready(self, timeout_s: float | None) -> bool:
         _ = timeout_s
         return self._pipeline is not None
 
@@ -170,23 +230,28 @@ class PyTritonTokenClassifierRuntime(TokenClassifierRuntime):
     def __init__(
         self,
         *,
-        model_name: str,
+        triton_model_name: str,
+        hf_model_name: str,
         pytriton_url: str,
-        init_timeout_s: float,
-        infer_timeout_s: float,
-        chunking: GlinerChunkingConfig | None = None,
+        init_timeout_s: float | None,
+        infer_timeout_s: float | None,
     ) -> None:
-        self._model_name = model_name
+        self._model_name = triton_model_name
+        self._hf_model_name = hf_model_name
         self._pytriton_url = pytriton_url
-        self._init_timeout_s = max(float(init_timeout_s), float(infer_timeout_s))
+        self._init_timeout_s = float(init_timeout_s) if init_timeout_s is not None else 120.0
+        if infer_timeout_s is not None:
+            self._init_timeout_s = max(self._init_timeout_s, float(infer_timeout_s))
         self._infer_timeout_s = infer_timeout_s
-        self._chunking = (chunking or GlinerChunkingConfig()).normalized()
         self._max_batch_size_hint = 32
         self.device = "cuda"
         self._ready = False
         self._load_error: str | None = None
+        self._tokenizer: Any | None = None
+        self._max_input_tokens: int | None = None
+        self._overlap_tokens: int | None = None
         self._contract = TritonModelContract(
-            name=model_name,
+            name=triton_model_name,
             inputs=(
                 TritonTensorContract(name="text", data_type="TYPE_STRING"),
                 TritonTensorContract(name="threshold", data_type="TYPE_FP32"),
@@ -194,6 +259,25 @@ class PyTritonTokenClassifierRuntime(TokenClassifierRuntime):
             ),
             outputs=(TritonTensorContract(name="detections_json", data_type="TYPE_STRING"),),
         )
+
+    def _load_tokenizer(self) -> None:
+        try:
+            from transformers import AutoModelForTokenClassification, AutoTokenizer
+        except Exception as exc:
+            self._load_error = f"transformers import error: {exc}"
+            return
+        try:
+            from app.runtime.mistral_regex_fix import maybe_fix_mistral_regex_in_tokenizer_dir
+
+            maybe_fix_mistral_regex_in_tokenizer_dir(self._hf_model_name)
+            tokenizer = AutoTokenizer.from_pretrained(self._hf_model_name, use_fast=True)
+            model = AutoModelForTokenClassification.from_pretrained(self._hf_model_name)
+            max_input_tokens = effective_max_tokens_for_token_classifier(model=model, tokenizer=tokenizer)
+            self._tokenizer = tokenizer
+            self._max_input_tokens = int(max_input_tokens)
+            self._overlap_tokens = deterministic_overlap_tokens(int(max_input_tokens))
+        except Exception as exc:  # pragma: no cover
+            self._load_error = f"token-classifier tokenizer load error: {exc}"
 
     @staticmethod
     def _extract_payload(output: Any) -> str:
@@ -283,22 +367,33 @@ class PyTritonTokenClassifierRuntime(TokenClassifierRuntime):
     def predict_entities(self, text: str, labels: list[str], threshold: float) -> list[dict[str, Any]]:
         if not self._ready:
             raise RuntimeError(self._load_error or "pytriton token-classifier runtime is not ready")
-        return run_chunked_inference(
+        if self._tokenizer is None or self._max_input_tokens is None or self._overlap_tokens is None:
+            self._load_tokenizer()
+        if self._tokenizer is None or self._max_input_tokens is None or self._overlap_tokens is None:
+            raise RuntimeError(self._load_error or "pytriton token-classifier runtime is not ready")
+        windows = chunk_text(
             text=text,
-            labels=labels,
-            threshold=threshold,
-            chunking=self._chunking,
-            predict_batch=self._predict_batch,
+            tokenizer=self._tokenizer,
+            max_input_tokens=self._max_input_tokens,
+            overlap_tokens=self._overlap_tokens,
+        )
+        chunk_texts = [text[w.text_start : w.text_end] for w in windows]
+        chunk_predictions = self._predict_batch(chunk_texts, labels, threshold)
+        return LocalCpuTokenClassifierRuntime._merge_window_predictions(  # noqa: SLF001
+            text=text,
+            windows=windows,
+            window_predictions=chunk_predictions,
+            default_threshold=threshold,
         )
 
-    def ensure_ready(self, timeout_s: float) -> bool:
+    def ensure_ready(self, timeout_s: float | None) -> bool:
         if self._ready:
             return True
         try:
             wait_for_triton_ready(
                 pytriton_url=self._pytriton_url,
                 contracts=[self._contract],
-                timeout_s=max(0.1, float(timeout_s)),
+                timeout_s=timeout_s,
             )
             self._ready = True
             self._load_error = None
@@ -321,37 +416,24 @@ def build_token_classifier_runtime(
     cpu_device: str,
     pytriton_url: str,
     pytriton_model_name: str,
-    pytriton_init_timeout_s: float,
-    pytriton_infer_timeout_s: float,
+    pytriton_init_timeout_s: float | None,
+    pytriton_infer_timeout_s: float | None,
     aggregation_strategy: str = "simple",
-    chunking_enabled: bool = True,
-    chunking_max_tokens: int = 320,
-    chunking_overlap_tokens: int = 64,
-    chunking_max_chunks: int = 64,
-    chunking_boundary_lookback_tokens: int = 24,
 ) -> TokenClassifierRuntime:
     mode = runtime_mode.strip().lower()
-    chunking = GlinerChunkingConfig(
-        enabled=chunking_enabled,
-        max_tokens=chunking_max_tokens,
-        overlap_tokens=chunking_overlap_tokens,
-        max_chunks=chunking_max_chunks,
-        boundary_lookback_tokens=chunking_boundary_lookback_tokens,
-    ).normalized()
 
     if mode == "cpu":
         return LocalCpuTokenClassifierRuntime(
             model_name=model_name,
             preferred_device=cpu_device,
             aggregation_strategy=aggregation_strategy,
-            chunking=chunking,
         )
     if mode == "cuda":
         return PyTritonTokenClassifierRuntime(
-            model_name=pytriton_model_name,
+            triton_model_name=pytriton_model_name,
+            hf_model_name=model_name,
             pytriton_url=pytriton_url,
             init_timeout_s=pytriton_init_timeout_s,
             infer_timeout_s=pytriton_infer_timeout_s,
-            chunking=chunking,
         )
     raise ValueError(f"unsupported runtime_mode '{runtime_mode}', expected 'cpu' or 'cuda'")

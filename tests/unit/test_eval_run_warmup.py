@@ -46,9 +46,9 @@ class _FakeAdapter:
 class _WarmupService:
     def __init__(self, *, readiness_errors: dict[str, str] | None = None) -> None:
         self.readiness_errors = readiness_errors or {}
-        self.readiness_calls: list[tuple[list[str], float]] = []
+        self.readiness_calls: list[tuple[list[str], float | None]] = []
 
-    def ensure_profile_runtimes_ready(self, *, profile_names: list[str], timeout_s: float) -> dict[str, str]:
+    def ensure_profile_runtimes_ready(self, *, profile_names: list[str], timeout_s: float | None) -> dict[str, str]:
         self.readiness_calls.append((profile_names, timeout_s))
         return self.readiness_errors
 

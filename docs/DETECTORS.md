@@ -150,6 +150,9 @@ Type: `gliner`
 Source:
 - GLiNER model (`urchade/gliner_multi-v2.1`) via local runtime (`cpu`) or PyTriton (`cuda`).
 
+Policy notes:
+- Input is chunked automatically based on the model context length using tokenizer offsets (full coverage, no chunk caps).
+
 Configured query labels:
 - `person`
 - `organization`
@@ -249,8 +252,35 @@ Policy notes:
 - Recognizer is loaded only when `GR_ENABLE_NEMOTRON=true` (default is disabled).
 - Default runtime policy keeps Nemotron on structured PII labels and intentionally excludes person-name labels to prevent large false-positive spikes on public benchmarks.
 - Per-entity minimum confidence thresholds are applied in recognizer postprocessing (`entity_thresholds` / `raw_label_thresholds`).
+- Input is chunked automatically based on the model context length using tokenizer offsets (full coverage, no chunk caps).
 
 Examples:
 - `Проживает: г. Казань, ул. Пушкина 12` -> `LOCATION`
 - `Почта: ivan.petrov@corp.local` -> `EMAIL_ADDRESS`
 - `ИНН 7707083893` -> `TIN`
+
+## Recognizer: `nemotron_pii_token_classifier_extended`
+
+Type: `token_classifier`
+
+Source:
+- Same runtime + model as `nemotron_pii_token_classifier` (`scanpatch/pii-ner-nemotron`).
+
+Raw model labels (BIO collapsed to entity group):
+- All labels from `nemotron_pii_token_classifier`, plus:
+- `first_name`, `last_name`, `middle_name`, `name`, `name_initials`, `nickname`
+- `organization`
+
+Configured mapping to normalized entities:
+- `PERSON`
+- `ORGANIZATION`
+- plus the same structured PII mappings as `nemotron_pii_token_classifier` (for example `LOCATION`, `EMAIL_ADDRESS`, `PHONE_NUMBER`, etc).
+
+Policy notes:
+- Intended for experiments where Nemotron is used as a partial replacement for GLiNER NER coverage (person/org).
+- Recognizer is loaded only when `GR_ENABLE_NEMOTRON=true`.
+- For end-to-end GLiNER disable experiments, set `GR_ENABLE_GLINER=false`.
+
+Examples:
+- `Иван Петров` -> `PERSON`
+- `ООО Ромашка` -> `ORGANIZATION`

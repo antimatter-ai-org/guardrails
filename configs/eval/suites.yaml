@@ -20,6 +20,7 @@ suites:
       - antimatter-ai/guardrails-ru-kaggle-pii-data-detection-sample-v1
       - antimatter-ai/guardrails-ru-hf-pii-sample-en-v1
       - antimatter-ai/guardrails-ru-presidio-test-dataset-v1
+      - antimatter-ai/guardrails-long-context-pii-synth-v1
 
   guardrails_long_context:
     title: Guardrails Long Context

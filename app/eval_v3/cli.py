@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import sys
@@ -188,14 +189,49 @@ def _env(name: str, default: str) -> str:
     return os.getenv(name, default)
 
 
+def _stable_run_tag(
+    *,
+    suite_name: str,
+    split: str,
+    dataset_ids: list[str],
+    policy_name: str,
+    tasks: list[str],
+    runtime: str,
+) -> str:
+    """
+    Deterministic tag to avoid parallel run_dir collisions (e.g., concurrent GPU5/GPU6 evals).
+    """
+
+    payload = {
+        "suite": str(suite_name),
+        "split": str(split),
+        "datasets": sorted(dataset_ids),
+        "policy_name": str(policy_name),
+        "tasks": list(tasks),
+        "runtime": str(runtime),
+        "enable_gliner": bool(settings.enable_gliner),
+        "enable_nemotron": bool(settings.enable_nemotron),
+        # In practice, split-runs also pin different GPUs and different embedded Triton ports.
+        "cuda_visible_devices": os.getenv("CUDA_VISIBLE_DEVICES"),
+        "pytriton_url": os.getenv("GR_PYTRITON_URL"),
+        "pytriton_grpc_port": os.getenv("GR_PYTRITON_GRPC_PORT"),
+        "pytriton_metrics_port": os.getenv("GR_PYTRITON_METRICS_PORT"),
+    }
+    blob = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha1(blob).hexdigest()[:10]
+
+
 def _maybe_start_embedded_pytriton() -> Any | None:
     if settings.runtime_mode != "cuda":
+        return None
+    if not bool(settings.enable_gliner) and not bool(settings.enable_nemotron):
         return None
     from app.runtime.pytriton_embedded import EmbeddedPyTritonConfig, EmbeddedPyTritonManager
 
     manager = EmbeddedPyTritonManager(
         EmbeddedPyTritonConfig(
             pytriton_url=settings.pytriton_url,
+            enable_gliner=settings.enable_gliner,
             gliner_model_ref=_env("GR_PYTRITON_GLINER_MODEL_REF", "urchade/gliner_multi-v2.1"),
             token_model_ref=_env("GR_PYTRITON_TOKEN_MODEL_REF", "scanpatch/pii-ner-nemotron"),
             model_dir=settings.model_dir,
@@ -216,15 +252,12 @@ def _maybe_start_embedded_pytriton() -> Any | None:
 def main() -> int:
     args = _parse_args()
     load_env_file(args.env_file)
-    run_id = f"evalv3_{args.suite}_{args.split or 'default'}_{datetime.now(tz=UTC).strftime('%Y%m%dT%H%M%SZ')}"
     started_at = datetime.now(tz=UTC)
     run_started = time.perf_counter()
 
     registry = load_eval_registry(args.registry_path)
     suite_name, dataset_ids, suite_default_split = _resolve_suite_and_datasets(registry, args.suite, args.dataset)
     split = str(args.split or suite_default_split)
-    # Now that split is resolved, make the run id stable/accurate.
-    run_id = f"evalv3_{suite_name}_{split}_{started_at.strftime('%Y%m%dT%H%M%SZ')}"
 
     tasks_raw = str(args.tasks).strip()
     if tasks_raw == "all":
@@ -252,15 +285,27 @@ def main() -> int:
         os.environ["GR_CPU_DEVICE"] = str(args.cpu_device)
         settings.cpu_device = str(args.cpu_device)
 
+    # Policy selection for span_detection / leakage.
+    policy_cfg = load_policy_config(args.policy_path)
+    span_policy_name = args.policy_name or policy_cfg.default_policy
+
+    # Now that split/runtime/policy are resolved, make the run id stable + collision-resistant.
+    run_tag = _stable_run_tag(
+        suite_name=suite_name,
+        split=split,
+        dataset_ids=dataset_ids,
+        policy_name=span_policy_name,
+        tasks=tasks,
+        runtime=str(settings.runtime_mode),
+    )
+    run_id = f"evalv3_{suite_name}_{split}_{started_at.strftime('%Y%m%dT%H%M%SZ')}_{run_tag}"
+
     hf_token_env = os.getenv(args.hf_token_env)
     offline_effective = bool(args.offline) or (os.getenv("HF_HUB_OFFLINE") == "1") or (os.getenv("HF_DATASETS_OFFLINE") == "1")
     # If HF_TOKEN isn't set, fall back to the locally cached HF auth token (hf auth login),
     # which is enabled by passing token=True to datasets/huggingface_hub calls.
     hf_token: str | bool | None = hf_token_env if hf_token_env else (True if not offline_effective else None)
 
-    # Policy selection for span_detection / leakage.
-    policy_cfg = load_policy_config(args.policy_path)
-    span_policy_name = args.policy_name or policy_cfg.default_policy
     if span_policy_name not in policy_cfg.policies:
         raise RuntimeError(f"unknown policy '{span_policy_name}'")
     span_policy = policy_cfg.policies[span_policy_name]
@@ -319,15 +364,81 @@ def main() -> int:
         service: PresidioAnalysisService,
         analyzer_profile: str,
         min_score: float,
+        progress_label: str,
+        progress_every_seconds: float,
     ) -> dict[str, dict[str, list[Any]]]:
         predictions_by_dataset: dict[str, dict[str, list[Any]]] = {}
+        total = sum(len(ds.samples) for ds in span_inputs)
+        processed = 0
+        started = time.perf_counter()
+        last_progress = started
         for ds in span_inputs:
             pred_by_id: dict[str, list[Any]] = {}
             for sample in ds.samples:
                 detections = service.analyze_text(text=sample.text, profile_name=analyzer_profile, policy_min_score=min_score)
                 pred_by_id[sample.sample_id] = as_eval_spans(detections)
+                processed += 1
+                now = time.perf_counter()
+                if progress_every_seconds and (now - last_progress) >= float(progress_every_seconds):
+                    rate = processed / max(1e-6, (now - started))
+                    eta_s = (total - processed) / max(1e-6, rate)
+                    print(
+                        f"[progress] task=policy_action_predict policy={progress_label} processed={processed}/{total} "
+                        f"rate={rate:.2f}/s eta_s={eta_s:.1f}",
+                        flush=True,
+                        file=sys.stderr,
+                    )
+                    last_progress = now
             predictions_by_dataset[ds.dataset_id] = pred_by_id
         return predictions_by_dataset
+
+    def policy_action_counts_for_policy(
+        *,
+        service: PresidioAnalysisService,
+        analyzer_profile: str,
+        min_score: float,
+        progress_label: str,
+        progress_every_seconds: float,
+    ) -> dict[str, int]:
+        # Streaming policy_action: compute TP/FP/TN/FN without storing span predictions,
+        # to avoid large memory spikes on long-context runs.
+        tp = fp = tn = fn = 0
+        total = sum(len(item.samples) for item in policy_inputs)
+        processed = 0
+        started = time.perf_counter()
+        last_progress = started
+
+        for item in policy_inputs:
+            scored = set(item.scored_labels)
+            for sample in item.samples:
+                gold_pos = any((span.canonical_label in scored) for span in sample.gold_spans if span.canonical_label)
+                detections = service.analyze_text(text=sample.text, profile_name=analyzer_profile, policy_min_score=min_score)
+                pred_spans = as_eval_spans(detections)
+                pred_pos = any((span.canonical_label in scored) for span in pred_spans if span.canonical_label)
+
+                if gold_pos and pred_pos:
+                    tp += 1
+                elif (not gold_pos) and pred_pos:
+                    fp += 1
+                elif gold_pos and (not pred_pos):
+                    fn += 1
+                else:
+                    tn += 1
+
+                processed += 1
+                now = time.perf_counter()
+                if progress_every_seconds and (now - last_progress) >= float(progress_every_seconds):
+                    rate = processed / max(1e-6, (now - started))
+                    eta_s = (total - processed) / max(1e-6, rate)
+                    print(
+                        f"[progress] task=policy_action policy={progress_label} processed={processed}/{total} "
+                        f"rate={rate:.2f}/s eta_s={eta_s:.1f}",
+                        flush=True,
+                        file=sys.stderr,
+                    )
+                    last_progress = now
+
+        return {"tp": tp, "fp": fp, "tn": tn, "fn": fn, "sample_count": total}
 
     report: dict[str, Any] = {
         "report_version": REPORT_VERSION,
@@ -352,6 +463,7 @@ def main() -> int:
                 "cpu_device": os.getenv("GR_CPU_DEVICE", "auto"),
             },
             "settings": {
+                "enable_gliner": bool(settings.enable_gliner),
                 "enable_nemotron": bool(settings.enable_nemotron),
                 "pytriton_url": str(settings.pytriton_url),
             },
@@ -360,6 +472,7 @@ def main() -> int:
                 # hostnames/connection strings into committed baselines/docs.
                 "GR_RUNTIME_MODE": os.getenv("GR_RUNTIME_MODE"),
                 "GR_CPU_DEVICE": os.getenv("GR_CPU_DEVICE"),
+                "GR_ENABLE_GLINER": os.getenv("GR_ENABLE_GLINER"),
                 "GR_ENABLE_NEMOTRON": os.getenv("GR_ENABLE_NEMOTRON"),
                 "CUDA_VISIBLE_DEVICES": os.getenv("CUDA_VISIBLE_DEVICES"),
             },
@@ -375,6 +488,7 @@ def main() -> int:
 
     # Span detection (single policy) + export EvalSpan predictions for downstream tasks.
     span_predictions_by_dataset: dict[str, dict[str, list[Any]]] | None = None
+    fatal_exc: BaseException | None = None
     try:
         if "span_detection" in tasks or "mask_leakage" in tasks:
             span_started = time.perf_counter()
@@ -399,8 +513,9 @@ def main() -> int:
         if "policy_action" in tasks:
             action_started = time.perf_counter()
             action_policy_names = _split_list(args.action_policies)
-            inputs_by_policy: dict[str, list[PolicyActionInputs]] = {}
             positive_action_by_policy: dict[str, str] = {}
+            policies_payload: dict[str, Any] = {}
+            sample_count = sum(len(item.samples) for item in policy_inputs)
 
             for policy_name in action_policy_names:
                 if policy_name not in policy_cfg.policies:
@@ -408,32 +523,52 @@ def main() -> int:
                 pol = policy_cfg.policies[policy_name]
                 positive_action_by_policy[policy_name] = "BLOCKED" if pol.mode == "block" else "MASKED"
 
-                # Reuse span predictions if the action policy matches the span policy.
                 if span_predictions_by_dataset is not None and policy_name == span_policy_name:
-                    preds = span_predictions_by_dataset
-                else:
-                    _ensure_runtime_ready(service=service, analyzer_profile=pol.analyzer_profile, policy_name=policy_name)
-                    preds = predict_eval_spans_for_policy(
-                        service=service, analyzer_profile=pol.analyzer_profile, min_score=float(pol.min_score)
-                    )
-
-                policy_specific_inputs: list[PolicyActionInputs] = []
-                for base in policy_inputs:
-                    policy_specific_inputs.append(
-                        PolicyActionInputs(
+                    # Cheap path: reuse span_detection outputs when policies match exactly.
+                    inputs_by_policy = {}
+                    for base in policy_inputs:
+                        inputs_by_policy[base.dataset_id] = PolicyActionInputs(
                             dataset_id=base.dataset_id,
                             split=base.split,
                             samples=base.samples,
-                            predictions_by_id=preds.get(base.dataset_id, {}),
+                            predictions_by_id=span_predictions_by_dataset.get(base.dataset_id, {}),
                             scored_labels=base.scored_labels,
                         )
+                    action_report = run_policy_action(
+                        inputs_by_policy={policy_name: list(inputs_by_policy.values())},
+                        positive_action_by_policy=positive_action_by_policy,
                     )
-                inputs_by_policy[policy_name] = policy_specific_inputs
+                    policies_payload[policy_name] = action_report["policies"][policy_name]
+                    continue
 
-            action_report = run_policy_action(
-                inputs_by_policy=inputs_by_policy,
-                positive_action_by_policy=positive_action_by_policy,
-            )
+                _ensure_runtime_ready(service=service, analyzer_profile=pol.analyzer_profile, policy_name=policy_name)
+                counts = policy_action_counts_for_policy(
+                    service=service,
+                    analyzer_profile=pol.analyzer_profile,
+                    min_score=float(pol.min_score),
+                    progress_label=str(policy_name),
+                    progress_every_seconds=float(args.progress_every_seconds),
+                )
+                from app.eval_v3.metrics.classification import BinaryCounts
+                from app.eval_v3.reporting.schema import binary_counts_payload
+
+                policies_payload[policy_name] = {
+                    "positive_action": positive_action_by_policy[policy_name],
+                    "metrics": binary_counts_payload(
+                        BinaryCounts(
+                            tp=int(counts["tp"]),
+                            fp=int(counts["fp"]),
+                            tn=int(counts["tn"]),
+                            fn=int(counts["fn"]),
+                        )
+                    ),
+                }
+
+            action_report = {
+                "elapsed_seconds": round(time.perf_counter() - action_started, 6),
+                "sample_count": sample_count,
+                "policies": policies_payload,
+            }
             report["tasks"]["policy_action"] = action_report
             report["run"]["timing"]["policy_action_seconds"] = round(time.perf_counter() - action_started, 6)
 
@@ -444,15 +579,16 @@ def main() -> int:
                 raise RuntimeError(
                     "mask_leakage requires span predictions; include span_detection or run without task filtering"
                 )
-            leak_report = run_mask_leakage(inputs=leakage_inputs, errors_preview_limit=int(args.errors_preview_limit))
+            leak_report = run_mask_leakage(
+                inputs=leakage_inputs,
+                errors_preview_limit=int(args.errors_preview_limit),
+                progress_every_seconds=float(args.progress_every_seconds),
+            )
             report["tasks"]["mask_leakage"] = leak_report
             report["run"]["timing"]["mask_leakage_seconds"] = round(time.perf_counter() - leakage_started, 6)
-    finally:
-        if manager is not None:
-            try:
-                manager.stop()
-            except Exception:
-                pass
+    except BaseException as exc:
+        # Still write a report file (best-effort) so runs are debuggable/comparable even on failures.
+        fatal_exc = exc
 
     finished_at = datetime.now(tz=UTC)
     report["run"]["finished_at_utc"] = finished_at.isoformat()
@@ -460,6 +596,17 @@ def main() -> int:
 
     outputs = write_report_files(report=report, output_dir=args.output_dir, run_id=run_id)
     print(json.dumps(outputs, ensure_ascii=False))
+
+    # Stop embedded Triton after we've written/printed the report outputs. If shutdown hangs,
+    # the run results are still recoverable from the printed paths above.
+    if manager is not None:
+        try:
+            manager.stop()
+        except Exception:
+            pass
+
+    if fatal_exc is not None:
+        raise fatal_exc
     return 0
 
 

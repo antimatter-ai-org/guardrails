@@ -22,6 +22,13 @@ policies:
     storage_ttl_seconds: 3600
     placeholder_prefix: "GR"
 
+  external_nemotron_only:
+    mode: mask
+    analyzer_profile: external_nemotron_only
+    min_score: 0.40
+    storage_ttl_seconds: 3600
+    placeholder_prefix: "GR"
+
 analyzer_profiles:
   external_rich:
     analysis:
@@ -50,6 +57,20 @@ analyzer_profiles:
         - en_pii_regex
         - code_secret_regex
         - high_entropy_secret
+
+  external_nemotron_only:
+    analysis:
+      recognizers:
+        - phone_number_lib
+        - ip_address_lib
+        - ru_pii_regex
+        - identifier_regex
+        - network_pii_regex
+        - date_pii_regex
+        - en_pii_regex
+        - code_secret_regex
+        - high_entropy_secret
+        - nemotron_pii_token_classifier_extended
 
   passthrough_profile:
     analysis:
@@ -290,12 +311,6 @@ recognizer_definitions:
         - "passport number"
         - "credit card number"
         - "api key"
-      chunking:
-        enabled: true
-        max_tokens: 320
-        overlap_tokens: 64
-        max_chunks: 64
-        boundary_lookback_tokens: 24
 
   natasha_ner_ru:
     type: natasha_ner
@@ -366,9 +381,81 @@ recognizer_definitions:
       raw_label_thresholds:
         address_geolocation: 0.90
         address: 0.84
-      chunking:
-        enabled: true
-        max_tokens: 320
-        overlap_tokens: 96
-        max_chunks: 64
-        boundary_lookback_tokens: 24
+
+  nemotron_pii_token_classifier_extended:
+    type: token_classifier
+    enabled: true
+    params:
+      model_name: "scanpatch/pii-ner-nemotron"
+      threshold: 0.40
+      aggregation_strategy: "max"
+      triton_model_name: "nemotron"
+      labels:
+        - "address"
+        - "address_apartment"
+        - "address_building"
+        - "address_city"
+        - "address_country"
+        - "address_district"
+        - "address_geolocation"
+        - "address_house"
+        - "address_postal_code"
+        - "address_region"
+        - "address_street"
+        - "date"
+        - "document_number"
+        - "email"
+        - "ip"
+        - "military_individual_number"
+        - "mobile_phone"
+        - "snils"
+        - "tin"
+        - "vehicle_number"
+        - "first_name"
+        - "last_name"
+        - "middle_name"
+        - "name"
+        - "name_initials"
+        - "nickname"
+        - "organization"
+      label_mapping:
+        address: LOCATION
+        address_apartment: LOCATION
+        address_building: LOCATION
+        address_city: LOCATION
+        address_country: LOCATION
+        address_district: LOCATION
+        address_geolocation: LOCATION
+        address_house: LOCATION
+        address_postal_code: LOCATION
+        address_region: LOCATION
+        address_street: LOCATION
+        date: DATE_TIME
+        document_number: DOCUMENT_NUMBER
+        email: EMAIL_ADDRESS
+        ip: IP_ADDRESS
+        military_individual_number: DOCUMENT_NUMBER
+        mobile_phone: PHONE_NUMBER
+        snils: DOCUMENT_NUMBER
+        tin: TIN
+        vehicle_number: DOCUMENT_NUMBER
+        first_name: PERSON
+        last_name: PERSON
+        middle_name: PERSON
+        name: PERSON
+        name_initials: PERSON
+        nickname: PERSON
+        organization: ORGANIZATION
+      entity_thresholds:
+        LOCATION: 0.78
+        DATE_TIME: 0.78
+        DOCUMENT_NUMBER: 0.80
+        EMAIL_ADDRESS: 0.72
+        IP_ADDRESS: 0.85
+        PHONE_NUMBER: 0.78
+        TIN: 0.88
+        PERSON: 0.55
+        ORGANIZATION: 0.55
+      raw_label_thresholds:
+        address_geolocation: 0.90
+        address: 0.84

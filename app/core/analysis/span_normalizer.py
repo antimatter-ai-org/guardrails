@@ -280,62 +280,85 @@ def _normalize_generic(*, text: str, detection: Detection) -> Detection:
 
 
 def _resolve_overlaps(detections: list[Detection]) -> tuple[list[Detection], int]:
+    # Deprecated: overlap-dropping is unsafe for leak prevention.
+    # Kept for API/backwards-compat imports; callers should use union merge.
+    return list(detections), 0
+
+
+def _union_merge_spans(*, text: str, detections: list[Detection]) -> tuple[list[Detection], int]:
+    """Merge overlapping/adjacent detections into non-overlapping mask spans.
+
+    This is deliberately conservative: we never drop coverage, we only expand by union.
+    """
+
     if not detections:
         return [], 0
 
-    def overlaps(left: Detection, right: Detection) -> bool:
-        return not (left.end <= right.start or left.start >= right.end)
-
-    def phone_like(text: str) -> bool:
-        digits = sum(char.isdigit() for char in text)
-        if digits < 10:
-            return False
-        compact = re.sub(r"\s+", "", text)
-        return bool(re.fullmatch(r"(?:\+?\d[\d()\-\s]{8,}\d)", compact) or re.fullmatch(r"\d{10,15}", compact))
-
-    def ip_like(text: str) -> bool:
-        value = text.strip().lower()
-        if not value:
-            return False
-        if "." in value and re.fullmatch(r"(?:\d{1,3}\.){3}\d{1,3}(?:/\d{1,2})?", value):
-            return True
-        return ":" in value and bool(re.fullmatch(r"[0-9a-f:]{2,}", value))
-
-    def priority(item: Detection) -> tuple[int, float, int, int]:
+    def rank(item: Detection) -> tuple[int, float, int, int]:
         metadata = item.metadata or {}
         canonical = str(metadata.get("canonical_label") or "").lower()
-        entity_type = str(metadata.get("entity_type") or "").upper()
-        detector_name = str(item.detector or "").lower()
-        signal = metadata.get("payment_card_signal", {})
-
         base = int(_CANONICAL_OVERLAP_PRIORITY.get(canonical, 70))
-        if canonical == "phone":
-            if entity_type in {"PHONE", "PHONE_NUMBER"} or "phone" in detector_name or phone_like(item.text):
-                base += 18
-            else:
-                base -= 10
-        if canonical == "identifier" and phone_like(item.text):
-            base -= 22
-        if canonical == "ip" and ip_like(item.text):
-            base += 16
-        if canonical == "payment_card" and isinstance(signal, dict):
-            if bool(signal.get("luhn_valid")):
-                base += 12
-            elif bool(signal.get("grouped_like_card")) or bool(signal.get("has_context")):
-                base += 6
-
         return (base, float(item.score), int(item.end - item.start), -int(item.start))
 
-    sorted_by_priority = sorted(detections, key=priority, reverse=True)
-    selected: list[Detection] = []
-    for candidate in sorted_by_priority:
-        if candidate.end <= candidate.start:
+    items = [d for d in detections if int(d.end) > int(d.start)]
+    items.sort(key=lambda d: (int(d.start), int(d.end)))
+
+    merged: list[Detection] = []
+    merges_performed = 0
+
+    group: list[Detection] = []
+    group_start = -1
+    group_end = -1
+
+    def flush() -> None:
+        nonlocal merges_performed, group, group_start, group_end
+        if not group:
+            return
+        best = max(group, key=rank)
+        max_score = max(float(item.score) for item in group)
+        detectors = sorted({str(item.detector or "") for item in group if str(item.detector or "").strip()})
+        canonicals = sorted(
+            {str((item.metadata or {}).get("canonical_label") or "").lower() for item in group if (item.metadata or {}).get("canonical_label")}
+        )
+        meta = dict(best.metadata or {})
+        meta["merged_from_detectors"] = detectors
+        meta["merged_from_canonical_labels"] = canonicals
+        merged.append(
+            Detection(
+                start=int(group_start),
+                end=int(group_end),
+                text=text[int(group_start) : int(group_end)],
+                label=str(best.label),
+                score=float(max_score),
+                detector=str(best.detector),
+                metadata=meta,
+            )
+        )
+        merges_performed += max(0, len(group) - 1)
+        group = []
+        group_start = -1
+        group_end = -1
+
+    for item in items:
+        start = int(item.start)
+        end = int(item.end)
+        if not group:
+            group = [item]
+            group_start = start
+            group_end = end
             continue
-        if any(overlaps(candidate, item) for item in selected):
+        if start <= group_end:  # overlap or adjacency
+            group.append(item)
+            group_end = max(group_end, end)
+            group_start = min(group_start, start)
             continue
-        selected.append(candidate)
-    selected_sorted = sorted(selected, key=lambda item: item.start)
-    return selected_sorted, max(0, len(detections) - len(selected_sorted))
+        flush()
+        group = [item]
+        group_start = start
+        group_end = end
+
+    flush()
+    return merged, merges_performed
 
 
 def normalize_detections(
@@ -385,8 +408,8 @@ def normalize_detections(
 
         normalized.append(updated)
 
-    resolved, overlaps_dropped = _resolve_overlaps(normalized)
-    stats.overlaps_dropped = overlaps_dropped
+    resolved, merges_performed = _union_merge_spans(text=text, detections=normalized)
+    stats.overlaps_dropped = merges_performed
     payload = {
         "trimmed_spans": stats.trimmed_spans,
         "expanded_spans": stats.expanded_spans,
