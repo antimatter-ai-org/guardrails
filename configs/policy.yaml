@@ -288,6 +288,14 @@ recognizer_definitions:
           label: API_KEY
           pattern: "(?i)\\b(?:api[_-]?key|secret|token|passwd|password)\\s*[:=]\\s*[\\\"']?[A-Za-z0-9_-]{16,}"
           score: 0.84
+        - name: password_assignment_gated
+          label: API_KEY
+          pattern: "(?i)\\b(?:password|passwd|pwd|passphrase|пароль|секрет|код\\s*доступа)\\b\\s*[:=]\\s*[\\\"']?(?=[^\\s\\\"']{10,64})(?=[^\\s\\\"']*\\d)(?=[^\\s\\\"']*[^A-Za-z\\s\\\"'])[A-Za-z0-9!@#$%^&*()_+\\-={}\\[\\]:;,.?/\\\\|~]+"
+          score: 0.78
+        - name: token_assignment_gated
+          label: API_KEY
+          pattern: "(?i)\\b(?:token|secret|api[_-]?key|access[_-]?key|private[_-]?key|auth(?:orization)?|bearer)\\b\\s*[:=]\\s*(?=[A-Za-z0-9._\\-]{16,})(?=.*\\d)(?=.*[._\\-])[A-Za-z0-9._\\-]+"
+          score: 0.84
         - name: private_key_block
           label: API_KEY
           pattern: "-----BEGIN (?:RSA |EC |OPENSSH |PGP )?PRIVATE KEY-----"
