@@ -38,6 +38,7 @@ analyzer_profiles:
         - ru_pii_regex
         - identifier_regex
         - network_pii_regex
+        - url_regex
         - date_pii_regex
         - en_pii_regex
         - code_secret_regex
@@ -53,6 +54,7 @@ analyzer_profiles:
         - ru_pii_regex
         - identifier_regex
         - network_pii_regex
+        - url_regex
         - date_pii_regex
         - en_pii_regex
         - code_secret_regex
@@ -66,6 +68,7 @@ analyzer_profiles:
         - ru_pii_regex
         - identifier_regex
         - network_pii_regex
+        - url_regex
         - date_pii_regex
         - en_pii_regex
         - code_secret_regex
@@ -216,6 +219,24 @@ recognizer_definitions:
           pattern: "(?i)\\b(?:[0-9a-f]{1,4}:){1,7}:[0-9a-f:]{0,17}\\b"
           score: 0.95
 
+  url_regex:
+    type: regex
+    enabled: true
+    params:
+      patterns:
+        - name: url_http
+          label: URL
+          pattern: "(?i)\\bhttps?://[^\\s<>()\\\"']+"
+          score: 0.97
+        - name: url_www
+          label: URL
+          pattern: "(?i)\\bwww\\.[^\\s<>()\\\"']+"
+          score: 0.95
+        - name: url_domain_tld
+          label: URL
+          pattern: "(?i)(?<!@)\\b(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\\.)+(?:com|net|org|io|ai|ru|ua|by|kz|de|fr|uk|co|edu|gov|info|biz|me|app|dev|site|online|store|tech|cloud|xyz)(?:/[^\\s<>()\\\"']*)?"
+          score: 0.75
+
   date_pii_regex:
     type: regex
     enabled: true
@@ -267,6 +288,18 @@ recognizer_definitions:
           label: API_KEY
           pattern: "(?i)\\b(?:api[_-]?key|secret|token|passwd|password)\\s*[:=]\\s*[\\\"']?[A-Za-z0-9_-]{16,}"
           score: 0.84
+        - name: password_assignment
+          label: API_KEY
+          pattern: "(?i)\\b(?:password|passwd|pwd|passphrase|пароль|секрет|код\\s*доступа)\\b\\s*[:=]\\s*[\\\"']?[^\\s\\\"']{4,64}"
+          score: 0.70
+        - name: token_assignment
+          label: API_KEY
+          pattern: "(?i)\\b(?:token|secret|api[_-]?key|access[_-]?key|private[_-]?key|auth(?:orization)?|bearer)\\b\\s*[:=]\\s*[A-Za-z0-9._\\-]{8,}"
+          score: 0.78
+        - name: bearer_token
+          label: API_KEY
+          pattern: "(?i)\\bBearer\\s+[A-Za-z0-9._\\-]{10,}"
+          score: 0.80
         - name: private_key_block
           label: API_KEY
           pattern: "-----BEGIN (?:RSA |EC |OPENSSH |PGP )?PRIVATE KEY-----"

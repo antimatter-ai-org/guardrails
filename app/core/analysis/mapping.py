@@ -26,6 +26,10 @@ def canonicalize_entity_type(entity_type: str, custom_mapping: dict[str, str] | 
         "IP": "ip",
         "DATE_TIME": "date",
         "DATE": "date",
+        "URL": "url",
+        "URI": "url",
+        "WEBSITE": "url",
+        "LINK": "url",
         "CREDIT_CARD": "payment_card",
         "PAYMENT_CARD": "payment_card",
         "SECRET": "secret",
@@ -51,6 +55,8 @@ def canonicalize_entity_type(entity_type: str, custom_mapping: dict[str, str] | 
         return "ip"
     if "DATE" in normalized:
         return "date"
+    if "URL" in normalized or "URI" in normalized or normalized == "LINK" or normalized == "WEBSITE":
+        return "url"
     if "PERSON" in normalized or normalized == "PER":
         return "person"
     if "ORG" in normalized:
