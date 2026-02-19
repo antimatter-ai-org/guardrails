@@ -34,6 +34,10 @@ Set required secrets in `.env`:
 - `LITELLM_MASTER_KEY`
 - `HF_TOKEN` (recommended)
 
+If you are reusing an older `.env`, ensure these compatibility-sensitive values are updated:
+- `GUARDRAILS_POLICY_ID=external`
+- `GR_ENABLE_NEMOTRON=true`
+
 Start stack:
 
 ```bash
