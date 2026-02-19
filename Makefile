@@ -49,7 +49,7 @@ test-integration: deps-up
 test-all: test-unit test-integration
 
 eval-all:
-	uv run --extra eval python -m app.eval_v3.cli --suite guardrails_ru --split fast --policy-path $(POLICY_PATH) --policy-name external_default --env-file $(EVAL_ENV_FILE) --output-dir $(EVAL_OUTPUT_DIR)
+	uv run --extra eval python -m app.eval.cli --suite guardrails_ru --split fast --policy-path $(POLICY_PATH) --policy-name external --env-file $(EVAL_ENV_FILE) --output-dir $(EVAL_OUTPUT_DIR)
 
 eval-scanpatch:
-	uv run --extra eval python -m app.eval.run --dataset scanpatch/pii-ner-corpus-synthetic-controlled --split test --policy-path $(POLICY_PATH) --policy-name external_default --env-file $(EVAL_ENV_FILE) --output-dir $(EVAL_OUTPUT_DIR)
+	uv run --extra eval python -m app.eval.cli --dataset antimatter-ai/guardrails-ru-scanpatch-pii-ner-controlled-v1 --split fast --policy-path $(POLICY_PATH) --policy-name external --env-file $(EVAL_ENV_FILE) --output-dir $(EVAL_OUTPUT_DIR)

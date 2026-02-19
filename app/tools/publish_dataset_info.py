@@ -6,7 +6,7 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
-from app.eval_v3.config import load_eval_registry
+from app.eval.config import load_eval_registry
 from app.tools.rebalance_fast_splits import _default_fast_plans
 
 

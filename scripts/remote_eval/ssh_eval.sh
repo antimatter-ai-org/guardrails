@@ -105,9 +105,9 @@ if [[ "$REMOTE_HAS_INTERNET" == "no" ]]; then
   export TRANSFORMERS_OFFLINE=1
 fi
 
-echo "[run] eval_v3 suite=$SUITE split=$SPLIT" >&2
+echo "[run] eval suite=$SUITE split=$SPLIT" >&2
 # stdout is JSON (report paths). Progress logs are emitted to stderr by design.
-uv run ${EXTRA_UV_ARGS[*]} python -m app.eval_v3.cli --suite "$SUITE" --split "$SPLIT" --env-file .env.eval --output-dir reports/evaluations
+uv run ${EXTRA_UV_ARGS[*]} python -m app.eval.cli --suite "$SUITE" --split "$SPLIT" --env-file .env.eval --output-dir reports/evaluations
 EOF
 )
 

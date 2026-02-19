@@ -44,7 +44,7 @@ services:
     environment:
       OPENROUTER_MODEL: ${OPENROUTER_MODEL:-openrouter/openai/gpt-4o-mini}
       GUARDRAILS_URL: ${GUARDRAILS_URL:-http://guardrails:8080}
-      GUARDRAILS_POLICY_ID: ${GUARDRAILS_POLICY_ID:-external_default}
+      GUARDRAILS_POLICY_ID: ${GUARDRAILS_POLICY_ID:-external}
       GUARDRAILS_TIMEOUT_S: ${GUARDRAILS_TIMEOUT_S:-15}
       GUARDRAILS_OUTPUT_SCOPE: ${GUARDRAILS_OUTPUT_SCOPE:-FULL}
     depends_on:

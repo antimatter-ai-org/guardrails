@@ -1,28 +1,16 @@
 from __future__ import annotations
 
 from app.pytriton_server.models.base import TritonModelBinding
-from app.pytriton_server.models.gliner import GlinerTritonModel
 from app.pytriton_server.models.token_classifier import TokenClassifierTritonModel
 
 
 def build_bindings(
-    gliner_model_ref: str,
     token_classifier_model_ref: str,
     device: str,
     max_batch_size: int,
-    enable_gliner: bool = True,
-    enable_nemotron: bool = False,
+    enable_nemotron: bool = True,
 ) -> list[TritonModelBinding]:
     models: list[object] = []
-    if enable_gliner:
-        models.append(
-            GlinerTritonModel(
-                triton_model_name="gliner",
-                gliner_hf_model_name=gliner_model_ref,
-                device=device,
-                max_batch_size=max_batch_size,
-            )
-        )
     if enable_nemotron:
         models.append(
             TokenClassifierTritonModel(

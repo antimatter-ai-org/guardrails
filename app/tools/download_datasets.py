@@ -7,7 +7,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from app.eval_v3.config import load_eval_registry
+from app.eval.config import load_eval_registry
 
 
 def _configure_hf_cache(root: Path) -> None:

@@ -15,7 +15,7 @@ def test_location_span_expands_to_address_chain_when_enabled() -> None:
             text=text[start:end],
             label="LOCATION",
             score=0.9,
-            detector="gliner",
+            detector="nemotron",
             metadata={"canonical_label": "location"},
         )
     ]
@@ -42,7 +42,7 @@ def test_location_span_keeps_original_when_context_is_not_address_like() -> None
             text=text[start:end],
             label="LOCATION",
             score=0.8,
-            detector="gliner",
+            detector="nemotron",
             metadata={"canonical_label": "location"},
         )
     ]
@@ -129,7 +129,7 @@ def test_overlap_ip_wins_over_conflicting_numeric_span() -> None:
             text=text[ip_start:ip_end],
             label="PHONE",
             score=0.91,
-            detector="gliner_pii_multilingual",
+            detector="nemotron_pii_token_classifier",
             metadata={"canonical_label": "phone", "entity_type": "PHONE_NUMBER"},
         ),
     ]

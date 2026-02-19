@@ -40,7 +40,7 @@ async def test_pre_call_masks_input_and_stores_session_ctx() -> None:
                 {"id": "msg-1-part-0", "text": "copy <MASK_B>"},
             ],
             "session": {"id": "sess_abc"},
-            "policy_id": "external_default",
+            "policy_id": "external",
         }
 
     callback._guardrails_apply = fake_apply  # type: ignore[method-assign]

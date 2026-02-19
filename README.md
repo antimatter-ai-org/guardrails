@@ -1,21 +1,38 @@
 # Guardrails Service
 
-Guardrails microservice for LLM routers.
+Guardrails microservice for PII detection, reversible masking, and controlled re-identification in LLM traffic.
 
-This service does not route LLM traffic itself. It exposes a unified guardrails API that a router can call before and after model calls.
+Release scope after cleanup:
+- Single configured policy: `external`
+- Single model-backed recognizer: Nemotron token classifier (`nemotron_pii_token_classifier`)
+- Legacy GLiNER stack removed from runtime, serving, config, docs, and tests
+- Modern eval framework is `app.eval`; legacy module naming is removed
 
-## Core Features
+## Quick Start
 
-- Unified `apply` API for stage-based guardrails decisions.
-- Reversible masking (`DEIDENTIFY`) and unmasking (`REIDENTIFY`).
-- Streaming reidentification (`apply-stream`) with placeholder split safety.
-- Redis-backed session storage for reversible mappings and stream buffers.
-- RU/EN detector stack (regex + GLiNER + optional Nemotron; Natasha available but disabled by default).
-- CPU/CUDA runtime switch:
-  - `cpu`: local inference (MPS auto on Apple Silicon when available)
-- `cuda`: embedded PyTriton runtime managed by Guardrails service
-- Air-gapped operation with offline model preload.
-- Manual evaluation framework with cached datasets/splits.
+Install deps:
+
+```bash
+uv sync --extra dev --extra eval
+```
+
+Run dependencies:
+
+```bash
+make deps-up
+```
+
+Run API:
+
+```bash
+make run-api
+```
+
+Run unit tests:
+
+```bash
+make test-unit
+```
 
 ## API Surface
 
@@ -28,165 +45,42 @@ This service does not route LLM traffic itself. It exposes a unified guardrails 
 - `POST /v1/guardrails/apply-stream`
 - `POST /v1/guardrails/sessions/{session_id}/finalize`
 
-Detailed contract and examples:
-- `/Users/oleg/Projects/_antimatter/guardrails/docs/API.md`
+Detailed API contract: `docs/API.md`
 
-Fetch OpenAPI spec for client generation:
+## Documentation
 
-```bash
-curl -sS http://localhost:8080/openapi.json > openapi.json
-```
+- Architecture: `docs/ARCHITECTURE.md`
+- Operations: `docs/OPERATIONS.md`
+- Evaluation: `docs/EVAL.md`
+- API contract: `docs/API.md`
+- LiteLLM/OpenRouter integration: `integrations/litellm_openrouter/README.md`
 
-## Typical Router Flow
+## Evaluation Commands
 
-1. Call `/v1/guardrails/apply` with `source=INPUT` and `DEIDENTIFY`.
-2. Send masked text to external LLM.
-3. For non-streaming output, call `/v1/guardrails/apply` with `source=OUTPUT` and `REIDENTIFY`.
-4. For streaming output, call `/v1/guardrails/apply-stream` per chunk with `REIDENTIFY`.
-5. Call `/v1/guardrails/sessions/{session_id}/finalize` when request completes/cancels/errors.
-
-## Runtime Configuration
-
-Global runtime mode:
-- `GR_RUNTIME_MODE=cpu`
-- `GR_RUNTIME_MODE=cuda`
-
-CPU mode:
-- GLiNER and token-classifier run in-process.
-- `GR_CPU_DEVICE=auto` chooses `mps` on Apple Silicon when available, otherwise `cpu`.
-
-CUDA mode:
-- Guardrails starts and manages PyTriton during app startup.
-- PyTriton binds to loopback (`127.0.0.1`) inside the container and is not router-visible.
-
-Startup/readiness:
-- Model runtimes are loaded and warmed up eagerly at startup (no lazy loading).
-- `/readyz` returns ready only after full model initialization completes.
-
-Other key settings:
-- `GR_ENABLE_NEMOTRON=false` (default)
-- `GR_ALLOW_MISSING_REIDENTIFY_SESSION=false` (default fail-closed for missing session)
-- `GR_PYTRITON_URL=127.0.0.1:8000` (internal endpoint used by runtime adapters)
-
-## Air-Gapped Models
-
-Download all required models:
+Run suite:
 
 ```bash
-make download-models MODELS_DIR=./.models
+uv run --extra eval python -m app.eval.cli --suite guardrails_ru --split fast --policy-path configs/policy.yaml --policy-name external --env-file .env.eval --output-dir reports/evaluations
 ```
 
-Run offline:
+Compare two reports:
 
 ```bash
-GR_MODEL_DIR=./.models \
-GR_OFFLINE_MODE=true \
-GR_REDIS_URL=redis://localhost:6379/0 \
-uv run uvicorn app.main:app --host 0.0.0.0 --port 8080
+uv run --extra eval python -m app.eval.compare --base /path/base.json --new /path/new.json --out /path/diff_dir
 ```
 
-## Evaluation
-
-Setup:
+Merge split-run reports:
 
 ```bash
-uv sync --extra dev --extra eval
-cp .env.eval.example .env.eval
-# set HF_TOKEN in .env.eval
+uv run --extra eval python -m app.tools.merge_eval_reports --out /path/merged.json /path/report1.json /path/report2.json
 ```
 
-Run all datasets:
+## Key Paths
 
-```bash
-uv run --extra eval python -m app.eval_v3.cli --suite guardrails_ru --split fast --policy-path configs/policy.yaml --policy-name external_default --env-file .env.eval --output-dir reports/evaluations
-```
-
-Run one dataset:
-
-```bash
-uv run --extra eval python -m app.eval_v3.cli --dataset antimatter-ai/guardrails-ru-scanpatch-pii-ner-controlled-v1 --split fast --env-file .env.eval
-```
-
-Decision trail for major detector/evaluation changes:
-- `/Users/oleg/Projects/_antimatter/guardrails/docs/DECISIONS.md`
-
-## Local Development
-
-Install dependencies:
-
-```bash
-uv sync --extra dev --extra eval
-```
-
-Run Redis dependency:
-
-```bash
-make deps-up
-```
-
-Run tests:
-
-```bash
-make test-unit
-make test-integration
-```
-
-Run API:
-
-```bash
-make run-api
-```
-
-## Docker
-
-- `Dockerfile`: Guardrails service `cpu` flavor (CPU + Apple Silicon MPS path)
-- `Dockerfile.cuda`: Guardrails service `cuda` flavor (embedded PyTriton + CUDA)
-
-`docker-compose.yml` is for dependencies only (Redis).
-
-Suggested image tags:
-- `guardrails:cpu`
-- `guardrails:cuda`
-
-CPU/MPS container:
-
-```bash
-docker build -f Dockerfile -t guardrails:cpu .
-docker run --rm -p 8080:8080 \
-  -e GR_REDIS_URL=redis://host.docker.internal:6379/0 \
-  guardrails:cpu
-```
-
-CUDA container:
-
-```bash
-docker build -f Dockerfile.cuda -t guardrails:cuda .
-docker run --rm --gpus all -p 8080:8080 \
-  -e GR_RUNTIME_MODE=cuda \
-  -e GR_REDIS_URL=redis://host.docker.internal:6379/0 \
-  guardrails:cuda
-```
-
-## Router PoC Integration
-
-OpenRouter + LiteLLM integration harness (with Guardrails callback and Postman assets):
-
-- `/Users/oleg/Projects/_antimatter/guardrails/integrations/litellm_openrouter/README.md`
-
-Run with one command:
-
-```bash
-docker compose -f integrations/litellm_openrouter/docker-compose.yml --env-file integrations/litellm_openrouter/.env up --build
-```
-
-## Key Files
-
-- `/Users/oleg/Projects/_antimatter/guardrails/app/main.py`: HTTP API
-- `/Users/oleg/Projects/_antimatter/guardrails/app/guardrails.py`: masking/unmasking orchestration
-- `/Users/oleg/Projects/_antimatter/guardrails/app/core/analysis`: detection pipeline and recognizers
-- `/Users/oleg/Projects/_antimatter/guardrails/app/core/masking/reversible.py`: reversible masking engine
-- `/Users/oleg/Projects/_antimatter/guardrails/app/runtime`: CPU/CUDA runtime adapters
-- `/Users/oleg/Projects/_antimatter/guardrails/app/pytriton_server`: PyTriton model server
-- `/Users/oleg/Projects/_antimatter/guardrails/app/tools/download_models.py`: model downloader
-- `/Users/oleg/Projects/_antimatter/guardrails/app/eval`: evaluation framework
-- `/Users/oleg/Projects/_antimatter/guardrails/configs/policy.yaml`: policies/profiles/recognizers
+- API app: `app/main.py`
+- Guardrails orchestration: `app/guardrails.py`
+- Detection pipeline: `app/core/analysis/`
+- Runtime adapters: `app/runtime/`
+- Embedded Triton server wiring: `app/pytriton_server/`
+- Eval framework: `app/eval/`
+- Policy config: `configs/policy.yaml`

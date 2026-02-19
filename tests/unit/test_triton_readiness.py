@@ -10,7 +10,7 @@ from app.runtime import triton_readiness
 
 def test_contract_from_binding_maps_tensor_dtypes() -> None:
     binding = SimpleNamespace(
-        name="gliner",
+        name="nemotron",
         inputs=[
             SimpleNamespace(name="text", dtype=bytes),
             SimpleNamespace(name="threshold", dtype=np.float32),
@@ -20,7 +20,7 @@ def test_contract_from_binding_maps_tensor_dtypes() -> None:
 
     contract = triton_readiness.contract_from_binding(binding)
 
-    assert contract.name == "gliner"
+    assert contract.name == "nemotron"
     assert contract.inputs[0] == triton_readiness.TritonTensorContract(name="text", data_type="TYPE_STRING")
     assert contract.inputs[1] == triton_readiness.TritonTensorContract(name="threshold", data_type="TYPE_FP32")
     assert contract.outputs[0] == triton_readiness.TritonTensorContract(name="detections_json", data_type="TYPE_STRING")
@@ -28,7 +28,7 @@ def test_contract_from_binding_maps_tensor_dtypes() -> None:
 
 def test_wait_for_triton_ready_succeeds_on_matching_contract(monkeypatch: pytest.MonkeyPatch) -> None:
     contract = triton_readiness.TritonModelContract(
-        name="gliner",
+        name="nemotron",
         inputs=(
             triton_readiness.TritonTensorContract(name="text", data_type="TYPE_STRING"),
             triton_readiness.TritonTensorContract(name="labels_json", data_type="TYPE_STRING"),

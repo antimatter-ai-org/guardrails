@@ -9,7 +9,7 @@ from typing import Any
 
 from app.config import load_policy_config
 from app.core.analysis.service import PresidioAnalysisService
-from app.eval_v3.predictors.analyze_text import as_eval_spans
+from app.eval.predictors.analyze_text import as_eval_spans
 from app.model_assets import apply_model_env
 from app.runtime.tokenizer_chunking import chunk_text, deterministic_overlap_tokens, effective_max_tokens_for_token_classifier
 from app.settings import settings
@@ -24,7 +24,7 @@ class InsertCase:
 def _parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Diagnose chunk-boundary behavior for long text.")
     p.add_argument("--policy-path", default="configs/policy.yaml")
-    p.add_argument("--policy-name", default="external_nemotron_only")
+    p.add_argument("--policy-name", default="external")
     p.add_argument("--model-name", default=None, help="Override HF model name for tokenizer config.")
     p.add_argument("--label", default="email")
     p.add_argument("--output", required=True)

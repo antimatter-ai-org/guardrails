@@ -11,57 +11,22 @@ class _StubModel:
         return self._name
 
 
-def test_build_bindings_without_nemotron(monkeypatch):
-    monkeypatch.setattr(registry, "GlinerTritonModel", _StubModel)
+def test_build_bindings_with_nemotron(monkeypatch) -> None:
     monkeypatch.setattr(registry, "TokenClassifierTritonModel", _StubModel)
     bindings = registry.build_bindings(
-        gliner_model_ref="urchade/gliner_multi-v2.1",
         token_classifier_model_ref="scanpatch/pii-ner-nemotron",
         device="cuda",
         max_batch_size=32,
-        enable_gliner=True,
-        enable_nemotron=False,
-    )
-    assert bindings == ["gliner"]
-
-
-def test_build_bindings_with_nemotron(monkeypatch):
-    monkeypatch.setattr(registry, "GlinerTritonModel", _StubModel)
-    monkeypatch.setattr(registry, "TokenClassifierTritonModel", _StubModel)
-    bindings = registry.build_bindings(
-        gliner_model_ref="urchade/gliner_multi-v2.1",
-        token_classifier_model_ref="scanpatch/pii-ner-nemotron",
-        device="cuda",
-        max_batch_size=32,
-        enable_gliner=True,
-        enable_nemotron=True,
-    )
-    assert bindings == ["gliner", "nemotron"]
-
-
-def test_build_bindings_without_gliner(monkeypatch):
-    monkeypatch.setattr(registry, "GlinerTritonModel", _StubModel)
-    monkeypatch.setattr(registry, "TokenClassifierTritonModel", _StubModel)
-    bindings = registry.build_bindings(
-        gliner_model_ref="urchade/gliner_multi-v2.1",
-        token_classifier_model_ref="scanpatch/pii-ner-nemotron",
-        device="cuda",
-        max_batch_size=32,
-        enable_gliner=False,
         enable_nemotron=True,
     )
     assert bindings == ["nemotron"]
 
 
-def test_build_bindings_without_any_models(monkeypatch):
-    monkeypatch.setattr(registry, "GlinerTritonModel", _StubModel)
-    monkeypatch.setattr(registry, "TokenClassifierTritonModel", _StubModel)
+def test_build_bindings_without_models() -> None:
     bindings = registry.build_bindings(
-        gliner_model_ref="urchade/gliner_multi-v2.1",
         token_classifier_model_ref="scanpatch/pii-ner-nemotron",
         device="cuda",
         max_batch_size=32,
-        enable_gliner=False,
         enable_nemotron=False,
     )
     assert bindings == []

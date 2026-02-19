@@ -199,34 +199,3 @@ def effective_max_tokens_for_token_classifier(*, model: Any, tokenizer: Any) -> 
         raise RuntimeError("invalid derived token-classifier context length")
     return cap
 
-
-def effective_max_tokens_for_gliner(*, gliner_model: Any, encoder_tokenizer: Any) -> int:
-    """Return the maximum number of *text tokens* (excluding special tokens)."""
-
-    _require_fast_tokenizer(encoder_tokenizer)
-
-    max_len: int | None = None
-    cfg = getattr(gliner_model, "config", None)
-    if isinstance(cfg, dict):
-        raw = cfg.get("max_len")
-        if isinstance(raw, (int, float, str)):
-            try:
-                max_len = int(raw)
-            except Exception:
-                max_len = None
-    else:
-        raw = getattr(cfg, "max_len", None)
-        if isinstance(raw, (int, float, str)):
-            try:
-                max_len = int(raw)
-            except Exception:
-                max_len = None
-
-    if max_len is None or max_len < 2:
-        raise RuntimeError("unable to determine GLiNER max_len (refuse to risk silent truncation)")
-
-    specials = int(getattr(encoder_tokenizer, "num_special_tokens_to_add", lambda **_: 0)(pair=False))
-    cap = int(max_len) - max(0, specials)
-    if cap < 2:
-        raise RuntimeError("invalid derived GLiNER context length")
-    return cap

@@ -10,8 +10,8 @@ from pathlib import Path
 from random import Random
 from typing import Any
 
-from app.eval_v3.config import load_eval_registry
-from app.eval_v3.datasets.hf_span_dataset import load_hf_split, scan_hf_span_dataset
+from app.eval.config import load_eval_registry
+from app.eval.datasets.hf_span_dataset import load_hf_split, scan_hf_span_dataset
 
 
 @dataclass(frozen=True, slots=True)
@@ -23,7 +23,7 @@ class FastSplitPlan:
 
 
 def _parse_args() -> argparse.Namespace:
-    p = argparse.ArgumentParser(description="Rebalance HF dataset fast splits for v3 eval.")
+    p = argparse.ArgumentParser(description="Rebalance HF dataset fast splits for eval.")
     p.add_argument("--registry-path", default=str(Path("configs") / "eval" / "suites.yaml"))
     p.add_argument("--suite", default="guardrails_ru")
     p.add_argument("--cache-dir", default=".eval_cache/hf", help="HF cache dir (HF_HOME/HF_DATASETS_CACHE root).")
@@ -60,7 +60,7 @@ def _default_fast_plans(registry_path: str, suite_name: str) -> list[FastSplitPl
     """
     Target: <= ~10 minutes total eval runtime on a single GPU for the full suite.
 
-    These values are tuned against observed throughput on H100 with v3 CUDA runtime + workers>1.
+    These values are tuned against observed throughput on H100 with CUDA runtime + workers>1.
     """
     reg = load_eval_registry(registry_path)
     suite = reg.suites.get(suite_name)
@@ -185,7 +185,7 @@ def _pick_fast_indices(
 
 def _count_fast_labels(*, ds_fast: Any, spans_field: str, label_map: dict[str, str]) -> tuple[int, dict[str, int]]:
     # Approximate: count entity spans by canonical label.
-    from app.eval_v3.datasets.hf_span_dataset import _map_gold_label  # local import to avoid making it public
+    from app.eval.datasets.hf_span_dataset import _map_gold_label  # local import to avoid making it public
 
     neg_rows = 0
     counts: Counter[str] = Counter()
@@ -224,7 +224,7 @@ def _update_derivation_stats(
         out["core_label_counts_fast"] = dict(label_counts_fast)
 
     # Add a non-breaking provenance block.
-    out["fast_rebalanced_v3"] = {
+    out["fast_rebalanced_eval"] = {
         "seed": int(seed),
         "negative_fraction": float(negative_fraction),
         "fast_rows": int(fast_rows),
@@ -371,7 +371,7 @@ def main() -> int:
                 ops.append(CommitOperationAdd(path_in_repo=stats_path, path_or_fileobj=str(out_stats)))
 
             msg = args.commit_message or (
-                f"Rebalance fast split for v3 eval (rows={len(ds_fast)}, seed={int(args.seed)}, neg_frac={plan.negative_fraction})"
+                f"Rebalance fast split for eval (rows={len(ds_fast)}, seed={int(args.seed)}, neg_frac={plan.negative_fraction})"
             )
             api.create_commit(
                 repo_id=plan.hf_id,

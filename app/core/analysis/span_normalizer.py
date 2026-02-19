@@ -279,12 +279,6 @@ def _normalize_generic(*, text: str, detection: Detection) -> Detection:
     return replace(detection, start=start, end=end, text=text[start:end])
 
 
-def _resolve_overlaps(detections: list[Detection]) -> tuple[list[Detection], int]:
-    # Deprecated: overlap-dropping is unsafe for leak prevention.
-    # Kept for API/backwards-compat imports; callers should use union merge.
-    return list(detections), 0
-
-
 def _union_merge_spans(*, text: str, detections: list[Detection]) -> tuple[list[Detection], int]:
     """Merge overlapping/adjacent detections into non-overlapping mask spans.
 

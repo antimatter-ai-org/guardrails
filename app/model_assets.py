@@ -31,14 +31,6 @@ def apply_model_env(model_dir: str | None, offline_mode: bool) -> None:
         os.environ["TRANSFORMERS_OFFLINE"] = "1"
 
 
-def gliner_repo_dirname(model_name: str) -> str:
-    return model_name.replace("/", "__")
-
-
-def gliner_local_dir(model_dir: str, model_name: str) -> Path:
-    return Path(model_dir) / "gliner" / gliner_repo_dirname(model_name)
-
-
 def token_classifier_repo_dirname(model_name: str) -> str:
     return model_name.replace("/", "__")
 
@@ -69,16 +61,6 @@ def _resolve_model_source(
     if strict:
         raise FileNotFoundError(f"{error_prefix} model not found in model_dir: {local_dir}")
     return model_name
-
-
-def resolve_gliner_model_source(model_name: str, model_dir: str | None, *, strict: bool = False) -> str:
-    return _resolve_model_source(
-        model_name=model_name,
-        model_dir=model_dir,
-        namespace_dir="gliner",
-        strict=strict,
-        error_prefix="GLiNER",
-    )
 
 
 def resolve_token_classifier_model_source(model_name: str, model_dir: str | None, *, strict: bool = False) -> str:

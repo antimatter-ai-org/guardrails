@@ -10,11 +10,11 @@ from typing import Any
 
 from app.config import load_policy_config
 from app.core.analysis.service import PresidioAnalysisService
-from app.eval_v3.config import load_eval_registry
-from app.eval_v3.datasets.hf_span_dataset import build_samples_from_hf_split, load_hf_split
-from app.eval_v3.metrics.spans import filter_scored_spans
-from app.eval_v3.predictors.analyze_text import as_eval_spans
-from app.eval_v3.tasks.span_detection import SpanDetectionInputs, run_span_detection
+from app.eval.config import load_eval_registry
+from app.eval.datasets.hf_span_dataset import build_samples_from_hf_split, load_hf_split
+from app.eval.metrics.spans import filter_scored_spans
+from app.eval.predictors.analyze_text import as_eval_spans
+from app.eval.tasks.span_detection import SpanDetectionInputs, run_span_detection
 from app.model_assets import apply_model_env
 from app.settings import settings
 
@@ -27,7 +27,7 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument("--cache-dir", default=str(Path(".eval_cache") / "hf"))
     p.add_argument("--hf-token-env", default="HF_TOKEN")
     p.add_argument("--policy-path", default="configs/policy.yaml")
-    p.add_argument("--policy-name", default="external_nemotron_only")
+    p.add_argument("--policy-name", default="external")
     p.add_argument("--max-examples-per-label", type=int, default=8)
     p.add_argument("--context-window", type=int, default=40)
     p.add_argument("--workers", type=int, default=8)

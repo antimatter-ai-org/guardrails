@@ -30,7 +30,7 @@ def test_apply_deidentify_and_stream_reidentify_flow() -> None:
         pytest.skip("guardrails service is not running")
 
     apply_payload = {
-        "policy_id": "external_default",
+        "policy_id": "external",
         "source": "INPUT",
         "content": [
             {
@@ -66,7 +66,7 @@ def test_apply_deidentify_and_stream_reidentify_flow() -> None:
     stream_1 = httpx.post(
         f"{GUARDRAILS_URL}/v1/guardrails/apply-stream",
         json={
-            "policy_id": "external_default",
+            "policy_id": "external",
             "source": "OUTPUT",
             "transforms": [
                 {
@@ -88,7 +88,7 @@ def test_apply_deidentify_and_stream_reidentify_flow() -> None:
     stream_2 = httpx.post(
         f"{GUARDRAILS_URL}/v1/guardrails/apply-stream",
         json={
-            "policy_id": "external_default",
+            "policy_id": "external",
             "source": "OUTPUT",
             "transforms": [
                 {
@@ -118,21 +118,13 @@ def test_apply_deidentify_and_stream_reidentify_flow() -> None:
     assert finalize.json()["context_deleted"] is True
 
 
-def test_block_policy_returns_blocked_action() -> None:
+def test_capabilities_exposes_single_external_policy() -> None:
     try:
         _wait_ready(GUARDRAILS_URL)
     except RuntimeError:
         pytest.skip("guardrails service is not running")
 
-    response = httpx.post(
-        f"{GUARDRAILS_URL}/v1/guardrails/apply",
-        json={
-            "policy_id": "strict_block",
-            "source": "INPUT",
-            "content": [{"id": "msg-1", "text": "user email admin@example.com"}],
-            "transforms": [{"type": "reversible_mask", "mode": "DEIDENTIFY"}],
-        },
-        timeout=10.0,
-    )
-    assert response.status_code == 200
-    assert response.json()["action"] == "BLOCKED"
+    response = httpx.get(f"{GUARDRAILS_URL}/v1/guardrails/capabilities", timeout=10.0)
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["policies"] == ["external"]

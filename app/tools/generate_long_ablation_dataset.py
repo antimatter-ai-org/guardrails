@@ -8,8 +8,8 @@ from datetime import datetime, UTC
 from pathlib import Path
 from typing import Iterable
 
-from app.eval_v3.config import load_eval_registry
-from app.eval_v3.datasets.hf_span_dataset import build_samples_from_hf_split, load_hf_split
+from app.eval.config import load_eval_registry
+from app.eval.datasets.hf_span_dataset import build_samples_from_hf_split, load_hf_split
 
 
 SAFE_WORDS = [

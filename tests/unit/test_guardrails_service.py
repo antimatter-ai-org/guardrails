@@ -46,23 +46,23 @@ class InMemoryStore:
 
 def _make_service() -> GuardrailsService:
     config = PolicyConfig(
-        default_policy="external_default",
+        default_policy="external",
         policies={
-            "external_default": PolicyDefinition(
+            "external": PolicyDefinition(
                 mode="mask",
                 analyzer_profile="regex_profile",
                 min_score=0.5,
                 storage_ttl_seconds=300,
                 placeholder_prefix="GR",
             ),
-            "strict_block": PolicyDefinition(
+            "external_blocking": PolicyDefinition(
                 mode="block",
                 analyzer_profile="regex_profile",
                 min_score=0.5,
                 storage_ttl_seconds=300,
                 placeholder_prefix="GR",
             ),
-            "onprem_passthrough": PolicyDefinition(
+            "external_passthrough": PolicyDefinition(
                 mode="passthrough",
                 analyzer_profile="empty_profile",
                 min_score=1.0,
@@ -108,7 +108,7 @@ async def test_mask_and_unmask_batch_flow() -> None:
 
     masked = await service.mask_items(
         request_id="req-1",
-        policy_name="external_default",
+        policy_name="external",
         items=[TextInput(id="m1", text="Почта ivan@example.com")],
     )
 
@@ -135,7 +135,7 @@ async def test_stream_unmask_handles_split_placeholder() -> None:
 
     masked = await service.mask_items(
         request_id="req-stream",
-        policy_name="external_default",
+        policy_name="external",
         items=[TextInput(id="m1", text="email ivan@example.com")],
     )
     placeholder_text = masked.items[0].text
@@ -169,7 +169,7 @@ async def test_block_policy_raises() -> None:
     with pytest.raises(GuardrailsBlockedError):
         await service.mask_items(
             request_id="req-block",
-            policy_name="strict_block",
+            policy_name="external_blocking",
             items=[TextInput(id="m1", text="email ivan@example.com")],
         )
 
@@ -195,7 +195,7 @@ async def test_passthrough_policy_returns_plain_text_without_language_resolution
 
     masked = await service.mask_items(
         request_id="req-pass",
-        policy_name="onprem_passthrough",
+        policy_name="external_passthrough",
         items=[TextInput(id="m1", text="Привет hello user@example.com")],
     )
 

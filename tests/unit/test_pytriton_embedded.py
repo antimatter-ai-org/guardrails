@@ -48,8 +48,6 @@ def _install_fake_pytriton(monkeypatch: pytest.MonkeyPatch, triton_cls: type[_Fa
 def _manager_config(url: str = "127.0.0.1:8000") -> EmbeddedPyTritonConfig:
     return EmbeddedPyTritonConfig(
         pytriton_url=url,
-        enable_gliner=True,
-        gliner_model_ref="gliner-model",
         token_model_ref="token-model",
         model_dir="/models",
         offline_mode=True,
@@ -67,7 +65,6 @@ def test_embedded_pytriton_manager_starts_with_loopback_bindings(monkeypatch: py
     readiness_calls: list[tuple[str, int, float | None]] = []
 
     monkeypatch.setattr(pytriton_embedded, "apply_model_env", lambda **kwargs: None)
-    monkeypatch.setattr(pytriton_embedded, "resolve_gliner_model_source", lambda **kwargs: "/models/gliner")
     monkeypatch.setattr(pytriton_embedded, "resolve_token_classifier_model_source", lambda **kwargs: "/models/token")
     monkeypatch.setattr(
         pytriton_embedded,
@@ -79,10 +76,7 @@ def test_embedded_pytriton_manager_starts_with_loopback_bindings(monkeypatch: py
     monkeypatch.setattr(
         pytriton_embedded,
         "build_bindings",
-        lambda **kwargs: [
-            SimpleNamespace(name="gliner", infer_func=lambda **_: None, inputs=[], outputs=[], config=None),
-            SimpleNamespace(name="nemotron", infer_func=lambda **_: None, inputs=[], outputs=[], config=None),
-        ],
+        lambda **kwargs: [SimpleNamespace(name="nemotron", infer_func=lambda **_: None, inputs=[], outputs=[], config=None)],
     )
 
     manager = EmbeddedPyTritonManager(_manager_config(url="localhost:9010"))
@@ -95,14 +89,14 @@ def test_embedded_pytriton_manager_starts_with_loopback_bindings(monkeypatch: py
 
     triton = _FakeTriton.instances[0]
     assert triton.run_calls == 1
-    assert len(triton.bind_calls) == 2
+    assert len(triton.bind_calls) == 1
     assert triton.config.kwargs["http_address"] == "127.0.0.1"
     assert triton.config.kwargs["grpc_address"] == "127.0.0.1"
     assert triton.config.kwargs["metrics_address"] == "127.0.0.1"
     assert triton.config.kwargs["http_port"] == 9010
     assert triton.config.kwargs["grpc_port"] == 9101
     assert triton.config.kwargs["metrics_port"] == 9102
-    assert readiness_calls == [("127.0.0.1:9010", 2, None)]
+    assert readiness_calls == [("127.0.0.1:9010", 1, None)]
 
     manager.stop()
     manager.stop()
@@ -120,13 +114,12 @@ def test_embedded_pytriton_manager_reports_startup_failure(monkeypatch: pytest.M
     _FailingTriton.instances.clear()
 
     monkeypatch.setattr(pytriton_embedded, "apply_model_env", lambda **kwargs: None)
-    monkeypatch.setattr(pytriton_embedded, "resolve_gliner_model_source", lambda **kwargs: "/models/gliner")
     monkeypatch.setattr(pytriton_embedded, "resolve_token_classifier_model_source", lambda **kwargs: "/models/token")
     monkeypatch.setattr(pytriton_embedded, "wait_for_triton_ready", lambda **kwargs: None)
     monkeypatch.setattr(
         pytriton_embedded,
         "build_bindings",
-        lambda **kwargs: [SimpleNamespace(name="gliner", infer_func=lambda **_: None, inputs=[], outputs=[], config=None)],
+        lambda **kwargs: [SimpleNamespace(name="nemotron", infer_func=lambda **_: None, inputs=[], outputs=[], config=None)],
     )
 
     manager = EmbeddedPyTritonManager(_manager_config())
@@ -150,12 +143,9 @@ def test_embedded_pytriton_manager_rejects_non_loopback_url(monkeypatch: pytest.
     assert manager.last_error() is not None
 
 
-def test_embedded_pytriton_manager_skips_triton_when_no_models_enabled(monkeypatch: pytest.MonkeyPatch) -> None:
-    # This path must not import/require pytriton at all.
+def test_embedded_pytriton_manager_skips_triton_when_models_disabled() -> None:
     cfg = EmbeddedPyTritonConfig(
         pytriton_url="localhost:9010",
-        enable_gliner=False,
-        gliner_model_ref="gliner-model",
         token_model_ref="token-model",
         model_dir="/models",
         offline_mode=True,

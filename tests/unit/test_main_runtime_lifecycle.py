@@ -46,10 +46,10 @@ class _FakePolicyResolver:
         self.config = config
 
     def list_policies(self) -> list[str]:
-        return ["external_default"]
+        return ["external"]
 
     def resolve_policy(self, policy_name: str | None = None) -> tuple[str, Any]:
-        return ("external_default", object())
+        return ("external", object())
 
 
 @pytest.mark.asyncio
@@ -137,7 +137,7 @@ async def test_background_init_sets_models_ready_on_success(monkeypatch: pytest.
             assert timeout_s is None
             return {}
 
-    fake_config = type("_Cfg", (), {"analyzer_profiles": {"external_rich": object()}, "recognizer_definitions": {}})()
+    fake_config = type("_Cfg", (), {"analyzer_profiles": {"external": object()}, "recognizer_definitions": {}})()
 
     def fake_load_runtime() -> None:
         main.app.state.policy_resolver = _FakePolicyResolver(fake_config)
@@ -157,9 +157,9 @@ async def test_background_init_sets_models_ready_on_success(monkeypatch: pytest.
 async def test_background_init_records_error_on_failure(monkeypatch: pytest.MonkeyPatch) -> None:
     class _FakeAnalysisService:
         def ensure_profile_runtimes_ready(self, *, profile_names: list[str], timeout_s: float | None) -> dict[str, str]:
-            return {"external_rich:gliner": "runtime is not ready"}
+            return {"external:nemotron": "runtime is not ready"}
 
-    fake_config = type("_Cfg", (), {"analyzer_profiles": {"external_rich": object()}, "recognizer_definitions": {}})()
+    fake_config = type("_Cfg", (), {"analyzer_profiles": {"external": object()}, "recognizer_definitions": {}})()
 
     def fake_load_runtime() -> None:
         main.app.state.policy_resolver = _FakePolicyResolver(fake_config)

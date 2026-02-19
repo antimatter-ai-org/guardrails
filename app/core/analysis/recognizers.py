@@ -8,8 +8,7 @@ import regex as re
 from presidio_analyzer import EntityRecognizer, Pattern, PatternRecognizer, RecognizerRegistry, RecognizerResult
 
 from app.config import RecognizerDefinition
-from app.model_assets import resolve_gliner_model_source, resolve_token_classifier_model_source
-from app.runtime.gliner_runtime import build_gliner_runtime
+from app.model_assets import resolve_token_classifier_model_source
 from app.runtime.token_classifier_runtime import build_token_classifier_runtime
 from app.settings import settings
 
@@ -182,66 +181,6 @@ class IPAddressRecognizer(EntityRecognizer):
                     start=start,
                     end=end,
                     score=self._score,
-                    recognition_metadata={
-                        RecognizerResult.RECOGNIZER_NAME_KEY: self.name,
-                        RecognizerResult.RECOGNIZER_IDENTIFIER_KEY: self.id,
-                    },
-                )
-            )
-        return results
-
-
-class GlinerPresidioRecognizer(EntityRecognizer):
-    def __init__(
-        self,
-        *,
-        name: str,
-        supported_language: str,
-        model_name: str,
-        labels: list[str],
-        threshold: float,
-        triton_model_name: str = "gliner",
-    ) -> None:
-        self._labels = [item for item in labels if item]
-        self._threshold = float(threshold)
-        self._runtime = build_gliner_runtime(
-            runtime_mode=settings.runtime_mode,
-            model_name=model_name,
-            cpu_device=settings.cpu_device,
-            pytriton_url=settings.pytriton_url,
-            pytriton_model_name=triton_model_name,
-            pytriton_init_timeout_s=settings.pytriton_init_timeout_s,
-            pytriton_infer_timeout_s=settings.pytriton_infer_timeout_s,
-        )
-        entities = sorted({_normalize_entity_type(label) for label in self._labels})
-        super().__init__(
-            supported_entities=entities,
-            name=name,
-            supported_language=supported_language,
-        )
-
-    def load(self) -> None:
-        return None
-
-    def analyze(self, text: str, entities: list[str], nlp_artifacts: Any = None) -> list[RecognizerResult]:
-        raw_predictions = self._runtime.predict_entities(text, self._labels, threshold=self._threshold)
-        results: list[RecognizerResult] = []
-        for item in raw_predictions:
-            label = str(item.get("label", ""))
-            entity_type = _normalize_entity_type(label)
-            if entities and entity_type not in entities:
-                continue
-            start = int(item.get("start", -1))
-            end = int(item.get("end", -1))
-            if end <= start:
-                continue
-            score = float(item.get("score", self._threshold))
-            results.append(
-                RecognizerResult(
-                    entity_type=entity_type,
-                    start=start,
-                    end=end,
-                    score=score,
                     recognition_metadata={
                         RecognizerResult.RECOGNIZER_NAME_KEY: self.name,
                         RecognizerResult.RECOGNIZER_IDENTIFIER_KEY: self.id,
@@ -625,37 +564,6 @@ def _build_ip_recognizers(
     ]
 
 
-def _build_gliner_recognizers(
-    recognizer_id: str,
-    definition: RecognizerDefinition,
-) -> list[EntityRecognizer]:
-    if not settings.enable_gliner:
-        return []
-
-    params = definition.params
-    labels = [str(item) for item in params.get("labels", [])]
-    if not labels:
-        return []
-    model_name = str(params.get("model_name", "urchade/gliner_multi-v2.1"))
-    model_source = resolve_gliner_model_source(
-        model_name=model_name,
-        model_dir=settings.model_dir,
-        strict=settings.offline_mode,
-    )
-    threshold = float(params.get("threshold", 0.62))
-    triton_model_name = str(params.get("triton_model_name", "gliner"))
-    return [
-        GlinerPresidioRecognizer(
-            name=recognizer_id,
-            supported_language=_PRESIDIO_COMPAT_LANGUAGE,
-            model_name=model_source,
-            labels=labels,
-            threshold=threshold,
-            triton_model_name=triton_model_name,
-        )
-    ]
-
-
 def _build_token_classifier_recognizers(
     recognizer_id: str,
     definition: RecognizerDefinition,
@@ -724,8 +632,6 @@ def _build_recognizers_for_definition(
         return _build_phone_recognizers(recognizer_id, definition)
     if rec_type == "ip":
         return _build_ip_recognizers(recognizer_id, definition)
-    if rec_type == "gliner":
-        return _build_gliner_recognizers(recognizer_id, definition)
     if rec_type == "token_classifier":
         return _build_token_classifier_recognizers(recognizer_id, definition)
     if rec_type == "natasha_ner":

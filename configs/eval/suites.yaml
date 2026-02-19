@@ -1,6 +1,6 @@
 version: 1
 
-# Eval suite + dataset registry for app.eval_v3.
+# Eval suite + dataset registry for app.eval.
 #
 # Design goals:
 # - Make dataset selection/configuration data-driven (no code changes to add datasets).

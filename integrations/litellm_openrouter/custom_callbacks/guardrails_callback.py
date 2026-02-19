@@ -52,7 +52,7 @@ def _safe_set(value: Any, key: str, new_value: Any) -> None:
 class GuardrailsCallback(CustomLogger):
     def __init__(self) -> None:
         self.guardrails_url = os.getenv("GUARDRAILS_URL", "http://guardrails:8080").rstrip("/")
-        self.guardrails_policy_id = os.getenv("GUARDRAILS_POLICY_ID", "external_default")
+        self.guardrails_policy_id = os.getenv("GUARDRAILS_POLICY_ID", "external")
         self.guardrails_timeout_s = float(os.getenv("GUARDRAILS_TIMEOUT_S", "15"))
         self.guardrails_output_scope = os.getenv("GUARDRAILS_OUTPUT_SCOPE", "FULL")
 
